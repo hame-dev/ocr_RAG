@@ -1,0 +1,219 @@
+# OCR + Agentic RAG stack.
+#
+# Ollama deliberately runs on the HOST (Metal GPU); every service reaches it via
+# host.docker.internal. `--profile bundled-ollama` starts an in-container Ollama
+# instead, for machines with no host install (CPU-only, much slower).
+
+x-ollama-env: &ollama-env
+  OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+  LLM_MODEL: ${LLM_MODEL:-qwen3.5:9b}
+  EMBED_MODEL: ${EMBED_MODEL:-bge-m3}
+  EMBED_DIMS: ${EMBED_DIMS:-1024}
+
+x-django-env: &django-env
+  DJANGO_SETTINGS_MODULE: ${DJANGO_SETTINGS_MODULE:-config.settings.dev}
+  DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:-dev-only-not-secret}
+  DJANGO_DEBUG: ${DJANGO_DEBUG:-1}
+  DJANGO_ALLOWED_HOSTS: ${DJANGO_ALLOWED_HOSTS:-*}
+  DATABASE_URL: postgresql://${POSTGRES_USER:-ocrrag}:${POSTGRES_PASSWORD:-ocrrag}@db:5432/${POSTGRES_DB:-ocrrag}
+  REDIS_URL: redis://redis:6379/0
+  MEDIA_ROOT: /data/media
+  EASYOCR_URL: http://ocr-easyocr:8081
+  PADDLE_URL: http://ocr-paddle:8082
+  OCR_PARALLELISM: ${OCR_PARALLELISM:-2}
+  OCR_DEFAULT_TIMEOUT_S: ${OCR_DEFAULT_TIMEOUT_S:-300}
+  PYTHONUNBUFFERED: "1"
+
+# host-gateway is required on Linux and harmless on macOS.
+x-hosts: &hosts
+  extra_hosts:
+    - "host.docker.internal:host-gateway"
+
+x-backend-build: &backend-build
+  build:
+    context: .
+    dockerfile: docker/backend/Dockerfile
+
+x-backend-volumes: &backend-volumes
+  volumes:
+    - ./backend:/app
+    - media:/data/media
+    - tessdata:/usr/share/tesseract-ocr/5/tessdata
+    - hf_cache:/root/.cache/huggingface
+
+services:
+  db:
+    build: ./docker/postgres
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-ocrrag}
+      POSTGRES_USER: ${POSTGRES_USER:-ocrrag}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ocrrag}
+    command:
+      - postgres
+      - -c
+      - shared_buffers=1GB
+      - -c
+      - maintenance_work_mem=1GB
+      - -c
+      - max_parallel_workers_per_gather=2
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "${POSTGRES_HOST_PORT:-5433}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-ocrrag} -d ${POSTGRES_DB:-ocrrag}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    mem_limit: 3g
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    mem_limit: 512m
+
+  # One-shot: runs migrations, then everything else waits on it completing.
+  migrate:
+    <<: [*backend-build, *backend-volumes, *hosts]
+    environment: {<<: [*django-env, *ollama-env]}
+    command: ["sh", "-c", "python manage.py migrate --noinput && python manage.py init_checkpointer"]
+    depends_on:
+      db: {condition: service_healthy}
+    restart: "no"
+
+  backend:
+    <<: [*backend-build, *backend-volumes, *hosts]
+    environment: {<<: [*django-env, *ollama-env]}
+    # ASGI, not WSGI — the SSE endpoints are async views.
+    command:
+      - uvicorn
+      - config.asgi:application
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+      - --workers
+      - "2"
+      - --timeout-keep-alive
+      - "75"
+    ports:
+      - "8000:8000"
+    depends_on:
+      db: {condition: service_healthy}
+      redis: {condition: service_healthy}
+      migrate: {condition: service_completed_successfully}
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/api/health/"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    mem_limit: 3g
+
+  worker:
+    <<: [*backend-build, *backend-volumes, *hosts]
+    environment: {<<: [*django-env, *ollama-env]}
+    # llm queue is concurrency 1 on purpose: it serializes access to the single
+    # host Ollama so VLM OCR, correction, enrichment and embedding never fight.
+    command:
+      - sh
+      - -c
+      - >-
+        celery -A config worker -l info
+        -Q default,celery,ocr_cpu,index -c ${OCR_PARALLELISM:-2}
+        --max-tasks-per-child 20 &
+        celery -A config worker -l info -Q llm -c 1
+        --max-tasks-per-child 10 -n llm@%h &
+        wait
+    depends_on:
+      db: {condition: service_healthy}
+      redis: {condition: service_healthy}
+      migrate: {condition: service_completed_successfully}
+    mem_limit: 6g
+
+  beat:
+    <<: [*backend-build, *backend-volumes, *hosts]
+    environment: {<<: [*django-env, *ollama-env]}
+    command: ["celery", "-A", "config", "beat", "-l", "info"]
+    depends_on:
+      redis: {condition: service_healthy}
+      migrate: {condition: service_completed_successfully}
+    mem_limit: 512m
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: ../docker/frontend/Dockerfile
+    environment:
+      NEXT_PUBLIC_API_BASE: ${NEXT_PUBLIC_API_BASE:-http://localhost:8000}
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+      - /app/.next
+    ports:
+      - "3000:3000"
+    depends_on:
+      backend: {condition: service_started}
+    mem_limit: 2g
+
+  # ---- Optional engine sidecars ---------------------------------------------
+  # EasyOCR: ~1.5GB torch dep tree, isolated so its size and OOM behaviour never
+  # touch the main worker. Phase 2.
+  ocr-easyocr:
+    profiles: ["easyocr", "all-engines"]
+    build:
+      context: ./docker/ocr-easyocr
+    volumes:
+      - media:/data/media
+      - easyocr_models:/root/.EasyOCR
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8081/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      start_period: 60s
+    mem_limit: 4g
+
+  # PaddleOCR: QUARANTINED. Segfaults on arm64 in Docker are a documented open
+  # issue, so it gets hard limits, its own profile, and an adapter that treats
+  # any failure as a failed run rather than a pipeline error. Phase 3.
+  ocr-paddle:
+    profiles: ["paddle", "all-engines"]
+    build:
+      context: ./docker/ocr-paddle
+    volumes:
+      - media:/data/media
+      - paddle_models:/root/.paddleocr
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8082/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      start_period: 90s
+    restart: unless-stopped
+    mem_limit: 3g
+    pids_limit: 256
+
+  # Only for machines with no host Ollama. CPU-only: expect it to be slow.
+  ollama:
+    profiles: ["bundled-ollama"]
+    image: ollama/ollama:latest
+    volumes:
+      - ollama_models:/root/.ollama
+    ports:
+      - "11434:11434"
+    mem_limit: 12g
+
+volumes:
+  pgdata:
+  media:
+  tessdata:
+  hf_cache:
+  easyocr_models:
+  paddle_models:
+  ollama_models:

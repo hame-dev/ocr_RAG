@@ -1,0 +1,63 @@
+# ---- Web framework ----------------------------------------------------------
+# 5.2 LTS rather than 6.0: the DRF / drf-spectacular ecosystem is settled here,
+# and nothing in this project needs 6.x.
+Django==5.2.7
+djangorestframework==3.16.1
+drf-spectacular==0.28.0
+django-cors-headers==4.7.0
+django-filter==25.1
+
+# ASGI. Django is WSGI by default; the SSE endpoints are async views, so the
+# whole app is served through uvicorn.
+uvicorn[standard]==0.35.0
+
+# ---- Database ---------------------------------------------------------------
+psycopg[binary,pool]==3.2.9
+pgvector==0.4.1
+dj-database-url==3.0.0
+
+# ---- Async jobs -------------------------------------------------------------
+celery[redis]==5.5.3
+redis==5.2.1
+
+# ---- LLM / agent ------------------------------------------------------------
+# Pinned exactly: qwen3.5 tool-calling through langchain-ollama is the most
+# version-sensitive part of the stack (risk #7).
+langgraph==0.6.7
+langgraph-checkpoint-postgres==2.0.24
+langchain-core==0.3.76
+langchain-ollama==0.3.10
+ollama==0.5.4
+
+# ---- Document / image processing --------------------------------------------
+pypdfium2==4.30.1          # rasterization + native text layer extraction
+opencv-python-headless==4.11.0.86
+scikit-image==0.25.2       # Sauvola binarization
+Pillow==11.3.0
+numpy==2.2.6
+pytesseract==0.3.13
+
+# ---- Text handling ----------------------------------------------------------
+regex==2024.11.6           # \X grapheme clusters — required for correct Arabic diffs
+tokenizers==0.21.1         # real bge-m3 tokenizer; char heuristics are wrong for Arabic
+hijri-converter==2.3.1     # real Arabic documents carry both calendars
+python-bidi==0.6.6
+arabic-reshaper==3.0.0
+rapidfuzz==3.13.0          # levenshtein for correction guards + citation matching
+
+# ---- Config / validation ----------------------------------------------------
+pydantic==2.11.7
+python-dotenv==1.1.1
+httpx==0.28.1
+
+# ---- Test fixtures ----------------------------------------------------------
+# WeasyPrint renders through Pango/HarfBuzz, which does Arabic shaping and the
+# bidi algorithm correctly. ReportLab does neither.
+weasyprint==65.1
+jiwer==3.1.0               # CER/WER against ground truth
+
+# ---- Tests ------------------------------------------------------------------
+pytest==8.4.1
+pytest-django==4.11.1
+pytest-asyncio==1.1.0
+responses==0.25.7

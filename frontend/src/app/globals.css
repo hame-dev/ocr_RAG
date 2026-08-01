@@ -1,0 +1,71 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg: #ffffff;
+  --fg: #111827;
+  --muted: #6b7280;
+  --border: #e5e7eb;
+  --card: #ffffff;
+  --accent: #2563eb;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0b0f19;
+    --fg: #e5e7eb;
+    --muted: #9ca3af;
+    --border: #1f2937;
+    --card: #111827;
+    --accent: #60a5fa;
+  }
+}
+
+body {
+  background: var(--bg);
+  color: var(--fg);
+}
+
+/*
+ * THE most important rule in this stylesheet.
+ *
+ * A bilingual OCR paragraph rendered without `unicode-bidi: plaintext` looks
+ * scrambled — punctuation jumps to the wrong end of the line and users conclude
+ * the OCR failed when it did not. `plaintext` makes the browser decide each
+ * paragraph's direction from its own first strong character, which is exactly
+ * right for text whose language we do not know in advance.
+ */
+.doc-text {
+  unicode-bidi: plaintext;
+  font-family: var(--font-doc), serif;
+  line-height: 1.9;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* Per-line direction in the editor. A single document-level dir scrambles
+   mixed Arabic/English content. */
+.doc-line {
+  unicode-bidi: plaintext;
+  display: block;
+}
+
+/* Latin digits everywhere for IDs, amounts, page numbers and confidences.
+   Arabic-Indic digits in a comparison table make correct OCR look wrong. */
+.numeric {
+  font-variant-numeric: tabular-nums;
+  direction: ltr;
+  unicode-bidi: isolate;
+}
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+}
+
+/* Directional icons must flip in RTL. */
+[dir="rtl"] .flip-rtl {
+  transform: scaleX(-1);
+}
