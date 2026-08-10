@@ -14,6 +14,7 @@ which would otherwise look plausible in the comparison grid. Two defences:
 from __future__ import annotations
 
 import logging
+import re
 import time
 from dataclasses import dataclass
 
@@ -65,6 +66,15 @@ class VLMSpec:
     preferred_dpi: int = 150
     prompt: str = TRANSCRIPTION_PROMPT
     languages: frozenset = frozenset({"ara", "eng"})
+    # Small OCR specialists are not instruction-tuned chat models. Their Ollama
+    # template is often a bare "{{ .Prompt }}", so a system message and a long
+    # rule list arrive as literal text the model tries to transcribe — which
+    # sends it into a degenerate repetition loop. Such models take a short
+    # keyword prompt and no system message.
+    system: str | None = SYSTEM_PROMPT
+    # Models that echo the page twice (plain, then fenced) need the duplicate
+    # collapsed, otherwise every chunk is indexed twice.
+    dedupe_fenced_echo: bool = False
 
 
 # Registered models. Only those actually pulled report available=True, and the
@@ -105,6 +115,27 @@ SPECS: list[VLMSpec] = [
         description_en="Token-efficient OCR model covering 100 languages.",
         description_ar="نموذج تعرف ضوئي فعال يغطي ١٠٠ لغة.",
         est_seconds_per_page=18.0,
+    ),
+    VLMSpec(
+        name="vlm_glm_ocr",
+        model_id="glm-ocr:latest",
+        display_name_en="GLM-OCR",
+        display_name_ar="GLM-OCR",
+        description_en=(
+            "Zhipu's document OCR model. Layout-aware, outputs markdown, strong on "
+            "tables and mixed-script pages."
+        ),
+        description_ar=(
+            "نموذج التعرف الضوئي من Zhipu. يدرك التخطيط وينتج ماركداون، وقوي مع "
+            "الجداول والصفحات متعددة النصوص."
+        ),
+        est_seconds_per_page=22.0,
+        # Verified against glm-ocr:latest (1.1B, template "{{ .Prompt }}"):
+        # the standard prompt makes it emit "Tent" forever, while the bare
+        # keyword "ocr" transcribes correctly.
+        prompt="ocr",
+        system=None,
+        dedupe_fenced_echo=True,
     ),
 ]
 
@@ -170,7 +201,7 @@ class BaseVLMEngine(OCREngine):
                     model,
                     self.spec.prompt,
                     images=[page_image.path],
-                    system=SYSTEM_PROMPT,
+                    system=self.spec.system,
                     timeout=job.deadline_s,
                     # Thinking blocks would leak into the transcript.
                     think=False,
@@ -181,6 +212,8 @@ class BaseVLMEngine(OCREngine):
                 raise TransientEngineError(f"{self.spec.name} failed: {exc}") from exc
 
             text = _strip_preamble(text)
+            if self.spec.dedupe_fenced_echo:
+                text = _collapse_fenced_echo(text)
             page = OCRPage(
                 page_number=page_image.page_number,
                 text=text,
@@ -237,6 +270,42 @@ def _strip_preamble(text: str) -> str:
     if any(first.lower().startswith(p) for p in _PREAMBLES) and first.rstrip().endswith(":"):
         return rest.strip()
     return stripped
+
+
+def _collapse_fenced_echo(text: str) -> str:
+    """Keep the fenced copy when a model emits the page twice, then repeats ```.
+
+    Observed on glm-ocr, whose raw output is:
+
+        INVOICE REF/2026/AR-0417
+        Total: SAR 12,500
+        ```markdown
+        INVOICE REF/2026/AR-0417
+        Total: SAR 12,500
+        ```
+        ```
+        ```      <- runaway empty fences to the token limit
+
+    Left alone this indexes every line twice and buries the transcript in
+    backticks. The fenced copy is preferred because it is the model's
+    structured answer — it keeps the markdown table and heading markup that
+    the plain prefix has already flattened.
+    """
+    if not text:
+        return text
+
+    fence = re.search(r"```(?:[a-zA-Z0-9_-]*)\n(.*?)```", text, re.S)
+    if fence:
+        inner = fence.group(1).strip()
+        if inner:
+            return inner
+
+    # No closed fence: drop any trailing run of stray fence markers so a
+    # truncated response does not end in dozens of backtick lines.
+    lines = text.split("\n")
+    while lines and lines[-1].strip().strip("`") == "":
+        lines.pop()
+    return "\n".join(lines).strip()
 
 
 def _make_engine(spec: VLMSpec) -> type:

@@ -3,6 +3,7 @@ import { IBM_Plex_Sans_Arabic, Noto_Naskh_Arabic } from "next/font/google";
 import "./globals.css";
 import { Providers } from "@/components/Providers";
 import { Shell } from "@/components/Shell";
+import { THEME_INIT_SCRIPT } from "@/lib/theme";
 
 // Latin and Arabic metrics genuinely match in IBM Plex Sans Arabic, which is
 // rare and matters for bilingual tables.
@@ -28,6 +29,11 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   // Arabic is the default locale, so the app is RTL out of the box.
   return (
     <html lang="ar" dir="rtl" className={`${ui.variable} ${doc.variable}`}>
+      <head>
+        {/* Blocking, so the stored theme lands on <html> before first paint and
+            a dark-theme user never sees a white flash. */}
+        <script dangerouslySetInnerHTML={{ __html: THEME_INIT_SCRIPT }} />
+      </head>
       <body className="font-sans antialiased">
         <Providers>
           <Shell>{children}</Shell>

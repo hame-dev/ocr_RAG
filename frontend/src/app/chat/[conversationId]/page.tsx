@@ -2,9 +2,12 @@
 
 import { useParams } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { API_BASE, Citation, api } from "@/lib/api";
 import { streamChat } from "@/lib/sse";
 import { useLocale } from "@/components/Providers";
+import { ChatSidebar } from "@/components/ChatSidebar";
+import { Markdown } from "@/components/Markdown";
 
 interface ChatMessage {
   role: "user" | "assistant";
@@ -17,12 +20,17 @@ interface ChatMessage {
 export default function ConversationPage() {
   const { t } = useLocale();
   const { conversationId } = useParams<{ conversationId: string }>();
+  const queryClient = useQueryClient();
 
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [streaming, setStreaming] = useState(false);
   const [toolPhase, setToolPhase] = useState<string | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  // Autoscroll only while the user is already at the bottom. Otherwise a long
+  // streaming answer yanks them away from the text they scrolled up to read.
+  const pinnedRef = useRef(true);
 
   useEffect(() => {
     void api<any>(`/api/conversations/${conversationId}/`).then((c) =>
@@ -36,8 +44,14 @@ export default function ConversationPage() {
   }, [conversationId]);
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+    if (pinnedRef.current) bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, toolPhase]);
+
+  function onScroll() {
+    const el = scrollRef.current;
+    if (!el) return;
+    pinnedRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+  }
 
   async function send() {
     const content = input.trim();
@@ -45,6 +59,7 @@ export default function ConversationPage() {
 
     setInput("");
     setStreaming(true);
+    pinnedRef.current = true; // sending is an explicit "follow along"
     setMessages((m) => [...m, { role: "user", content },
                               { role: "assistant", content: "", pending: true }]);
 
@@ -83,20 +98,28 @@ export default function ConversationPage() {
     });
 
     setStreaming(false);
+    // The backend titles a conversation from its first turn, so the rail needs
+    // to re-read the list once the turn lands.
+    void queryClient.invalidateQueries({ queryKey: ["conversations"] });
   }
 
   return (
-    <div className="flex h-[calc(100vh-8rem)] flex-col">
-      <div className="flex-1 space-y-4 overflow-y-auto pb-4">
+    <div className="flex h-[calc(100vh-8rem)] gap-4">
+      <ChatSidebar activeId={conversationId} />
+
+      <div className="flex min-w-0 flex-1 flex-col">
+      <div ref={scrollRef} onScroll={onScroll} className="flex-1 space-y-4 overflow-y-auto pb-4">
         {messages.map((m, i) => (
           <div key={i} className={m.role === "user" ? "flex justify-end" : ""}>
             <div
               className={`max-w-[85%] rounded-2xl px-4 py-2.5 ${m.role === "user" ? "text-white" : "card"}`}
               style={m.role === "user" ? { background: "var(--accent)" } : undefined}
             >
-              <p className="doc-text text-sm" dir="auto">
-                {m.content || (m.pending ? "…" : "")}
-              </p>
+              {m.content ? (
+                <Markdown onAccent={m.role === "user"}>{m.content}</Markdown>
+              ) : null}
+              {/* A bare cursor stands in until the first token lands. */}
+              {m.pending && <span className="md-cursor" aria-hidden />}
 
               {m.citations && m.citations.length > 0 && (
                 <div className="mt-3 border-t pt-2" style={{ borderColor: "var(--border)" }}>
@@ -162,6 +185,7 @@ export default function ConversationPage() {
         >
           {t("send")}
         </button>
+      </div>
       </div>
     </div>
   );

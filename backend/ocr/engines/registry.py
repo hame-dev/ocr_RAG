@@ -115,6 +115,7 @@ def available_names() -> list[str]:
 def load_engines() -> None:
     """Import every engine module so decorators run. Called from apps.ready()."""
     from . import (  # noqa: F401
+        chandra,
         easyocr_remote,
         native_pdf,
         surya,

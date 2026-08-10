@@ -3,7 +3,8 @@
 import { useQuery } from "@tanstack/react-query";
 import { api, listEngines } from "@/lib/api";
 import { num } from "@/lib/i18n";
-import { useLocale } from "@/components/Providers";
+import { useLocale, useTheme } from "@/components/Providers";
+import { ACCENTS, THEME_MODES, ThemeMode } from "@/lib/theme";
 
 /**
  * Operator view: which engines are healthy, and why the unhealthy ones are not.
@@ -11,7 +12,8 @@ import { useLocale } from "@/components/Providers";
  * `ollama pull` is self-diagnosing.
  */
 export default function SettingsPage() {
-  const { locale, t } = useLocale();
+  const { locale, setLocale, t } = useLocale();
+  const { mode, accent, setMode, setAccent } = useTheme();
   const { data: engineData, refetch } = useQuery({
     queryKey: ["engines", "settings"],
     queryFn: () => listEngines(true),
@@ -34,6 +36,97 @@ export default function SettingsPage() {
           Re-probe
         </button>
       </div>
+
+      <section className="card space-y-5 p-4">
+        <h2 className="font-medium">{t("appearance")}</h2>
+
+        {/* Theme mode */}
+        <div>
+          <p className="mb-2 text-sm" style={{ color: "var(--muted)" }}>{t("theme")}</p>
+          <div className="inline-flex rounded-lg border p-0.5"
+               style={{ borderColor: "var(--border)" }}>
+            {THEME_MODES.map((m) => {
+              const active = mode === m;
+              const label: Record<ThemeMode, string> = {
+                system: t("themeSystem"), light: t("themeLight"), dark: t("themeDark"),
+              };
+              return (
+                <button
+                  key={m}
+                  onClick={() => setMode(m)}
+                  aria-pressed={active}
+                  className="rounded-md px-3 py-1.5 text-sm transition-colors"
+                  style={
+                    active
+                      ? { background: "var(--accent)", color: "#fff" }
+                      : { color: "var(--muted)" }
+                  }
+                >
+                  {label[m]}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Accent colour */}
+        <div>
+          <p className="mb-2 text-sm" style={{ color: "var(--muted)" }}>{t("accentColor")}</p>
+          <div className="flex flex-wrap gap-2">
+            {ACCENTS.map((a) => {
+              const active = accent === a.name;
+              const label = locale === "ar" ? a.label_ar : a.label_en;
+              return (
+                <button
+                  key={a.name}
+                  onClick={() => setAccent(a.name)}
+                  aria-pressed={active}
+                  aria-label={label}
+                  title={label}
+                  className="flex items-center gap-2 rounded-lg border px-2.5 py-1.5 text-sm"
+                  style={{
+                    borderColor: active ? "var(--accent)" : "var(--border)",
+                    background: active ? "var(--hover)" : undefined,
+                  }}
+                >
+                  <span
+                    className="inline-block h-4 w-4 rounded-full"
+                    style={{ background: a.swatch }}
+                    aria-hidden
+                  />
+                  {label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Language — was only reachable from the header toggle. */}
+        <div>
+          <p className="mb-2 text-sm" style={{ color: "var(--muted)" }}>{t("language")}</p>
+          <div className="inline-flex rounded-lg border p-0.5"
+               style={{ borderColor: "var(--border)" }}>
+            {(["ar", "en"] as const).map((l) => {
+              const active = locale === l;
+              return (
+                <button
+                  key={l}
+                  onClick={() => setLocale(l)}
+                  aria-pressed={active}
+                  className="rounded-md px-3 py-1.5 text-sm transition-colors"
+                  style={
+                    active
+                      ? { background: "var(--accent)", color: "#fff" }
+                      : { color: "var(--muted)" }
+                  }
+                >
+                  {l === "ar" ? "العربية" : "English"}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      </section>
 
       {health && (
         <section className="card p-4">

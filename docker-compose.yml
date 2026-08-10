@@ -22,6 +22,9 @@ x-django-env: &django-env
   PADDLE_URL: http://ocr-paddle:8082
   OCR_PARALLELISM: ${OCR_PARALLELISM:-2}
   OCR_DEFAULT_TIMEOUT_S: ${OCR_DEFAULT_TIMEOUT_S:-300}
+  CHANDRA_BIN: ${CHANDRA_BIN:-chandra}
+  CHANDRA_METHOD: ${CHANDRA_METHOD:-hf}
+  CHANDRA_TIMEOUT_S: ${CHANDRA_TIMEOUT_S:-1800}
   PYTHONUNBUFFERED: "1"
 
 # host-gateway is required on Linux and harmless on macOS.

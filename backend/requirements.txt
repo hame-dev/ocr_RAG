@@ -37,6 +37,25 @@ Pillow==11.3.0
 numpy==2.2.6
 pytesseract==0.3.13
 
+# ---- Optional OCR engines ---------------------------------------------------
+# Chandra OCR 2 has two engines, and NEITHER needs anything installed here.
+#
+# `chandra_ollama` (recommended) needs no Python package at all — just:
+#     ollama pull fredrezones55/chandra-ocr-2
+#   Faster than the CLI, and it returns layout boxes the CLI does not. Use the
+#   fredrezones55 build specifically: another upload of this model on Ollama is
+#   unpatched and reports no vision capability, which the health probe rejects.
+#
+# `chandra` (the official CLI) is deliberately NOT a dependency: the [hf] extra
+#   pulls torch plus ~9GB of weights on first run, which would triple the image
+#   size. Enable it only if you need the exact upstream pipeline:
+#     pip install 'chandra-ocr[hf]'
+#   Then set CHANDRA_METHOD=hf (default), or start `chandra_vllm` separately
+#   and set CHANDRA_METHOD=vllm for the faster path.
+#
+# Both health probes print their own fix command, so an unavailable engine in
+# Settings always explains itself.
+
 # ---- Text handling ----------------------------------------------------------
 regex==2024.11.6           # \X grapheme clusters — required for correct Arabic diffs
 tokenizers==0.21.1         # real bge-m3 tokenizer; char heuristics are wrong for Arabic

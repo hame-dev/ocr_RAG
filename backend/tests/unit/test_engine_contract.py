@@ -6,7 +6,10 @@ from ocr.tasks import _engine_signatures
 def test_every_registered_engine_uses_shared_contract():
     engines = registry.all_engines()
 
-    assert len(engines) == 8
+    # A floor, not an exact count: adding an engine is a normal change and must
+    # not fail this test. What matters is that each one honours the contract.
+    assert len(engines) >= 8
+    assert len({e.name for e in engines}) == len(engines), "duplicate engine name"
     for engine in engines:
         assert isinstance(engine, OCREngine)
         entry = engine.catalog_entry(EngineHealth(available=True))

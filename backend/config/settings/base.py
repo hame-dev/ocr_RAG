@@ -126,6 +126,21 @@ PADDLE_URL = os.environ.get("PADDLE_URL", "http://ocr-paddle:8082")
 OCR_DEFAULT_TIMEOUT_S = int(os.environ.get("OCR_DEFAULT_TIMEOUT_S", "300"))
 ENGINE_HEALTH_TTL_S = 60
 
+# ---- Chandra OCR 2 ----------------------------------------------------------
+# Chandra ships no Ollama build, so it is driven through its own CLI
+# (`pip install chandra-ocr[hf]`). Two inference methods:
+#   hf   — local transformers + torch. Self-contained, slow, needs the weights
+#          downloaded once (~9GB) and enough VRAM/unified memory.
+#   vllm — talks to a `chandra_vllm` server the operator starts separately.
+# `hf` is the default because it needs no second process.
+CHANDRA_BIN = os.environ.get("CHANDRA_BIN", "chandra")
+CHANDRA_METHOD = os.environ.get("CHANDRA_METHOD", "hf")
+# Weights are large; first run downloads them and can far exceed a normal page
+# timeout, so this budget is per-run, not per-page.
+CHANDRA_TIMEOUT_S = int(os.environ.get("CHANDRA_TIMEOUT_S", "1800"))
+# `--method hf` forces batch size 1 in the CLI itself; kept configurable for vllm.
+CHANDRA_BATCH_SIZE = int(os.environ.get("CHANDRA_BATCH_SIZE", "0")) or None
+
 LOGGING = {
     "version": 1,
     "disable_existing_loggers": False,
