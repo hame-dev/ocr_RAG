@@ -135,6 +135,7 @@ ENGINE_HEALTH_TTL_S = 60
 # `hf` is the default because it needs no second process.
 CHANDRA_BIN = os.environ.get("CHANDRA_BIN", "chandra")
 CHANDRA_METHOD = os.environ.get("CHANDRA_METHOD", "hf")
+DEFAULT_OCR_ENGINE = os.environ.get("DEFAULT_OCR_ENGINE", "chandra_ollama")
 # Weights are large; first run downloads them and can far exceed a normal page
 # timeout, so this budget is per-run, not per-page.
 CHANDRA_TIMEOUT_S = int(os.environ.get("CHANDRA_TIMEOUT_S", "1800"))

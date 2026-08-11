@@ -41,7 +41,7 @@ class OCRBatchSerializer(serializers.ModelSerializer):
 
 class StartOCRSerializer(serializers.Serializer):
     engines = serializers.ListField(
-        child=serializers.CharField(), allow_empty=False, min_length=1
+        child=serializers.CharField(), allow_empty=False, min_length=1, required=False
     )
     languages = serializers.ListField(child=serializers.CharField(), required=False)
     options = serializers.JSONField(required=False)

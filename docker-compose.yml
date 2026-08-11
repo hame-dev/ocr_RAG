@@ -22,6 +22,7 @@ x-django-env: &django-env
   PADDLE_URL: http://ocr-paddle:8082
   OCR_PARALLELISM: ${OCR_PARALLELISM:-2}
   OCR_DEFAULT_TIMEOUT_S: ${OCR_DEFAULT_TIMEOUT_S:-300}
+  DEFAULT_OCR_ENGINE: ${DEFAULT_OCR_ENGINE:-chandra_ollama}
   CHANDRA_BIN: ${CHANDRA_BIN:-chandra}
   CHANDRA_METHOD: ${CHANDRA_METHOD:-hf}
   CHANDRA_TIMEOUT_S: ${CHANDRA_TIMEOUT_S:-1800}
@@ -71,7 +72,7 @@ services:
     mem_limit: 3g
 
   redis:
-    image: redis:7-alpine
+    image: redis:8-alpine
     command: ["redis-server", "--save", "", "--appendonly", "no"]
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]

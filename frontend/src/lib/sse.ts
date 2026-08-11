@@ -1,4 +1,4 @@
-import { API_BASE } from "./api";
+import { API_BASE, ResearchMode } from "./api";
 
 /**
  * Subscribe to a document's lifecycle + OCR progress stream.
@@ -34,7 +34,7 @@ export function subscribeToDocument(
 
 export interface StreamHandlers {
   onToken?: (t: string) => void;
-  onToolStart?: (name: string, args: unknown) => void;
+  onToolStart?: (name: string, args: unknown, phase?: string) => void;
   onToolEnd?: (name: string, hits: number) => void;
   onDone?: (payload: any) => void;
   onError?: (detail: string) => void;
@@ -49,13 +49,14 @@ export interface StreamHandlers {
 export async function streamChat(
   conversationId: string,
   content: string,
+  researchMode: ResearchMode,
   handlers: StreamHandlers,
   signal?: AbortSignal,
 ): Promise<void> {
   const res = await fetch(`${API_BASE}/api/conversations/${conversationId}/stream/`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ content }),
+    body: JSON.stringify({ content, research_mode: researchMode }),
     signal,
   });
 
@@ -96,7 +97,7 @@ export async function streamChat(
 
       switch (event) {
         case "token": handlers.onToken?.(payload.t); break;
-        case "tool_start": handlers.onToolStart?.(payload.name, payload.args); break;
+        case "tool_start": handlers.onToolStart?.(payload.name, payload.args, payload.phase); break;
         case "tool_end": handlers.onToolEnd?.(payload.name, payload.hits); break;
         case "done": handlers.onDone?.(payload); break;
         case "error": handlers.onError?.(payload.detail); break;

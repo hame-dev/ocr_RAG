@@ -15,7 +15,7 @@ else is a container.
 |---|---|
 | Infra (compose, Dockerfiles, Postgres+pgvector, Redis, Makefile) | ✅ built & verified |
 | Backend (6 Django apps, 40+ endpoints, migrations applied) | ✅ built & verified end to end |
-| OCR engine plugin architecture + 8 engines registered | ✅ built, 4 verified live |
+| OCR engine plugin architecture + 10 engines registered | ✅ built, 4 verified live |
 | Metadata extraction (plan + extract + retry ladder) | ✅ built & verified live |
 | RAG (chunking, pgvector, hybrid RRF) | ✅ verified with Arabic + English retrieval |
 | LangGraph agent + SSE chat | ✅ verified live with tool call + explicit citation |
@@ -97,8 +97,8 @@ ordinary string literals, which would silently produce a no-op normalizer) is
 avoided.
 
 ### Django
-Boots clean, **8 engines register**:
-`easyocr, native_pdf, surya, tesseract, vlm_deepseek_ocr, vlm_qari, vlm_qwen35, vlm_qwen3vl`
+Boots clean, **10 engines register**:
+`chandra, chandra_ollama, easyocr, native_pdf, surya, tesseract, vlm_deepseek_ocr, vlm_qari, vlm_qwen35, vlm_qwen3vl`
 
 ### Arabic utilities
 Unit-tested by hand: normalization (6/6 cases), language detection, bidi-suspect
@@ -214,7 +214,7 @@ The AI "improve" feature is the easiest way to quietly ruin this product, so:
 
 - Docker Desktop, ~8 GB free
 - [Ollama](https://ollama.com) on the host
-- ~10 GB for models: `qwen3.5:9b` (6.6 GB), `bge-m3` (1.2 GB), `surya-ocr-2` (609 MB)
+- ~15 GB for models: `qwen3.5:9b` (6.6 GB), `fredrezones55/chandra-ocr-2` (5.8 GB), `bge-m3` (1.2 GB), `surya-ocr-2` (609 MB)
 
 ```bash
 cp .env.example .env

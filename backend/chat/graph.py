@@ -24,11 +24,11 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode, tools_condition
 
+from chat.research import DEFAULT_RESEARCH_MODE, research_profile
 from chat.tools import TOOLS
 
 logger = logging.getLogger(__name__)
 
-MAX_TOOL_ITERATIONS = 6
 SUMMARIZE_AFTER_MESSAGES = 20
 
 SYSTEM_PROMPT = """You are a research assistant for a personal document library. \
@@ -44,12 +44,17 @@ in the form [[cite:<chunk_id>]], using a chunk_id you actually received from a t
 - If the documents do not contain the answer, say so plainly. Do not guess.
 - If OCR text looks garbled, say the source may be misread rather than inventing a reading.
 - Quote exact figures, dates and reference numbers verbatim; never round or reformat them.
+- When the user asks for a graph, diagram, flow, timeline or relationship map and the
+documents contain enough evidence, include a valid fenced ```mermaid diagram after a
+cited prose explanation. Keep labels concise, use no HTML or external links, and never
+put [[cite:...]] markers inside the Mermaid block. Do not add a diagram when prose or a
+small table would communicate the answer more clearly.
 {scope_note}"""
 
 SCOPE_ALL = "\nYou are searching the user's entire document library."
 SCOPE_SELECTED = (
-    "\nYou are scoped to {count} specific document(s): {titles}. "
-    "Pass doc_ids={ids} to search_documents so you stay within them."
+    "\nYou are scoped to {count} specific document(s): {titles}. Every document "
+    "tool is already restricted to those sources; do not claim to consult anything else."
 )
 
 CITE_RE = re.compile(r"\[\[cite:([0-9a-fA-F\-]{6,40})\]\]")
@@ -60,15 +65,16 @@ class AgentState(TypedDict):
     messages: Annotated[list[AnyMessage], add_messages]
     doc_ids: list[str] | None
     scope_note: str
-    tool_iterations: int
+    research_mode: str
+    tool_rounds: int
     retrieved: dict
     summary: str
 
 
-def _llm():
+def _llm(*, with_tools: bool = True):
     from langchain_ollama import ChatOllama
 
-    return ChatOllama(
+    model = ChatOllama(
         base_url=settings.OLLAMA_BASE_URL,
         model=settings.LLM_MODEL,
         temperature=0.2,
@@ -76,12 +82,13 @@ def _llm():
         # qwen3.5's thinking blocks leak into answers and break citation
         # parsing, so reasoning stays off for this agent.
         reasoning=False,
-    ).bind_tools(TOOLS)
+    )
+    return model.bind_tools(TOOLS) if with_tools else model
 
 
 async def prepare(state: AgentState) -> dict:
     messages = state["messages"]
-    updates: dict = {"tool_iterations": 0}
+    updates: dict = {"tool_rounds": 0}
 
     if len(messages) > SUMMARIZE_AFTER_MESSAGES:
         # Collapse the oldest turns into a summary so num_ctx stays bounded.
@@ -119,24 +126,48 @@ async def prepare(state: AgentState) -> dict:
 
 async def agent(state: AgentState) -> dict:
     system = SYSTEM_PROMPT.format(scope_note=state.get("scope_note", SCOPE_ALL))
+    profile = research_profile(state.get("research_mode", DEFAULT_RESEARCH_MODE))
+    system += f"\n\n{profile['instruction']}"
     if summary := state.get("summary"):
         system += f"\n\nEarlier in this conversation:\n{summary}"
 
     messages = [SystemMessage(content=system)] + list(state["messages"])
     response = await _llm().ainvoke(messages)
-    return {
-        "messages": [response],
-        "tool_iterations": state.get("tool_iterations", 0) + 1,
-    }
+    return {"messages": [response]}
 
 
 def _route(state: AgentState) -> str:
-    # Hard cap: without it a confused model can loop on tool calls indefinitely,
-    # burning the whole context window and never answering.
-    if state.get("tool_iterations", 0) >= MAX_TOOL_ITERATIONS:
-        logger.info("tool iteration cap reached; forcing finalize")
+    wants_tool = tools_condition(state) == "tools"
+    if not wants_tool:
         return "finalize"
-    return "tools" if tools_condition(state) == "tools" else "finalize"
+
+    # Each profile has a deterministic cap. If the model asks for another tool
+    # at the cap, a tool-free model turn must still produce a useful answer.
+    profile = research_profile(state.get("research_mode", DEFAULT_RESEARCH_MODE))
+    if state.get("tool_rounds", 0) >= profile["max_tool_rounds"]:
+        logger.info("%s research cap reached; forcing answer", state.get("research_mode"))
+        return "force_answer"
+    return "tools"
+
+
+async def force_answer(state: AgentState) -> dict:
+    """Produce a final cited response instead of ending on an unexecuted tool call."""
+    system = SYSTEM_PROMPT.format(scope_note=state.get("scope_note", SCOPE_ALL))
+    system += (
+        "\n\nThe research budget is exhausted. Do not request more tools. Answer now "
+        "using only the evidence already returned, retain exact figures, and include "
+        "the required citation markers."
+    )
+    if summary := state.get("summary"):
+        system += f"\n\nEarlier in this conversation:\n{summary}"
+
+    history = list(state["messages"])
+    if history and getattr(history[-1], "tool_calls", None):
+        history = history[:-1]
+    response = await _llm(with_tools=False).ainvoke(
+        [SystemMessage(content=system)] + history
+    )
+    return {"messages": [response]}
 
 
 async def collect(state: AgentState) -> dict:
@@ -157,7 +188,10 @@ async def collect(state: AgentState) -> dict:
             for hit in content:
                 if isinstance(hit, dict) and hit.get("chunk_id"):
                     retrieved[str(hit["chunk_id"])] = hit
-    return {"retrieved": retrieved}
+    return {
+        "retrieved": retrieved,
+        "tool_rounds": state.get("tool_rounds", 0) + 1,
+    }
 
 
 async def finalize(state: AgentState) -> dict:
@@ -170,15 +204,19 @@ def build_graph(checkpointer=None):
     graph.add_node("agent", agent)
     graph.add_node("tools", ToolNode(TOOLS, handle_tool_errors=True))
     graph.add_node("collect", collect)
+    graph.add_node("force_answer", force_answer)
     graph.add_node("finalize", finalize)
 
     graph.add_edge(START, "prepare")
     graph.add_edge("prepare", "agent")
     graph.add_conditional_edges(
-        "agent", _route, {"tools": "tools", "finalize": "finalize"}
+        "agent",
+        _route,
+        {"tools": "tools", "force_answer": "force_answer", "finalize": "finalize"},
     )
     graph.add_edge("tools", "collect")
     graph.add_edge("collect", "agent")
+    graph.add_edge("force_answer", "finalize")
     graph.add_edge("finalize", END)
 
     return graph.compile(checkpointer=checkpointer)

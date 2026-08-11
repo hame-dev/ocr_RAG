@@ -7,7 +7,7 @@ SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 PROJECT_DIR=$(cd "$SCRIPT_DIR/.." && pwd)
 API_BASE=${API_BASE:-http://localhost:8000}
 FIXTURE=${SMOKE_FIXTURE:-$PROJECT_DIR/backend/tests/fixtures/scan_clean.pdf}
-ENGINES=${SMOKE_ENGINES:-tesseract,vlm_qwen35}
+ENGINES=${SMOKE_ENGINES:-chandra_ollama}
 TIMEOUT_S=${SMOKE_TIMEOUT_S:-300}
 POLL_S=2
 

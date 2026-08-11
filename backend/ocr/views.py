@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 
+from django.conf import settings
 from django.http import Http404
 from rest_framework import status, viewsets
 from rest_framework.decorators import action, api_view
@@ -23,7 +24,12 @@ logger = logging.getLogger(__name__)
 def engine_catalog(request):
     """Health-probed engine list. The UI only offers available=True engines."""
     force = request.query_params.get("refresh") == "1"
-    return Response({"engines": registry.probe_all(force=force)})
+    return Response(
+        {
+            "engines": registry.probe_all(force=force),
+            "default_engine": settings.DEFAULT_OCR_ENGINE,
+        }
+    )
 
 
 class OCRBatchViewSet(viewsets.ReadOnlyModelViewSet):
@@ -150,7 +156,7 @@ def start_ocr(request, document_id):
 
     serializer = StartOCRSerializer(data=request.data)
     serializer.is_valid(raise_exception=True)
-    requested = serializer.validated_data["engines"]
+    requested = serializer.validated_data.get("engines") or [settings.DEFAULT_OCR_ENGINE]
 
     known = set(registry.names())
     unknown = [e for e in requested if e not in known]

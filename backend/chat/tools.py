@@ -7,10 +7,13 @@ should never be able to mutate the corpus it retrieves from.
 from __future__ import annotations
 
 import logging
+from typing import Annotated
 
 from asgiref.sync import sync_to_async
 from langchain_core.tools import tool
+from langgraph.prebuilt import InjectedState
 
+from chat.research import research_profile
 from rag.search import format_hits, hybrid_search
 
 logger = logging.getLogger(__name__)
@@ -19,8 +22,8 @@ logger = logging.getLogger(__name__)
 @tool
 async def search_documents(
     query: str,
-    top_k: int = 8,
-    doc_ids: list[str] | None = None,
+    allowed_doc_ids: Annotated[list[str] | None, InjectedState("doc_ids")],
+    research_mode: Annotated[str, InjectedState("research_mode")],
     doc_type: str | None = None,
     lang: str | None = None,
 ) -> list[dict]:
@@ -31,8 +34,6 @@ async def search_documents(
 
     Args:
         query: What to look for. A phrase works better than a single word.
-        top_k: How many passages to return (default 8).
-        doc_ids: Restrict to these document ids. Omit to search everything.
         doc_type: Restrict by type, e.g. "contract", "invoice", "report".
         lang: Restrict by chunk language: "ar", "en" or "mixed".
 
@@ -40,14 +41,24 @@ async def search_documents(
         Passages with chunk_id, document_id, document_title, page numbers and text.
         Cite a passage with [[cite:<chunk_id>]].
     """
+    if allowed_doc_ids == []:
+        return []
+    profile = research_profile(research_mode)
     hits = await sync_to_async(hybrid_search, thread_sensitive=True)(
-        query, top_k=min(top_k, 20), doc_ids=doc_ids, doc_type=doc_type, lang=lang
+        query,
+        top_k=profile["top_k"],
+        doc_ids=allowed_doc_ids,
+        doc_type=doc_type,
+        lang=lang,
     )
-    return format_hits(hits)
+    return format_hits(hits, max_chars=profile["excerpt_chars"])
 
 
 @tool
-async def get_document_metadata(document_id: str) -> dict:
+async def get_document_metadata(
+    document_id: str,
+    allowed_doc_ids: Annotated[list[str] | None, InjectedState("doc_ids")],
+) -> dict:
     """Get the structured metadata record for one document.
 
     Use this for questions about a document as a whole — its type, its dates,
@@ -59,6 +70,8 @@ async def get_document_metadata(document_id: str) -> dict:
     def _load():
         from enrichment.models import MetadataRecord
 
+        if not _document_is_allowed(document_id, allowed_doc_ids):
+            return {"error": "document is outside this conversation's selected sources"}
         record = MetadataRecord.objects.filter(document_id=document_id).first()
         if not record:
             return {"error": f"no metadata for document {document_id}"}
@@ -85,6 +98,7 @@ async def get_document_metadata(document_id: str) -> dict:
 
 @tool
 async def list_documents(
+    allowed_doc_ids: Annotated[list[str] | None, InjectedState("doc_ids")],
     query: str | None = None,
     doc_type: str | None = None,
     lang: str | None = None,
@@ -101,6 +115,8 @@ async def list_documents(
         from documents.models import Document
 
         qs = Document.objects.select_related("metadata").filter(status="ready")
+        if allowed_doc_ids is not None:
+            qs = qs.filter(id__in=allowed_doc_ids)
         if doc_type:
             qs = qs.filter(metadata__doc_type=doc_type)
         if lang:
@@ -125,7 +141,11 @@ async def list_documents(
 
 
 @tool
-async def read_document_page(document_id: str, page_number: int) -> str:
+async def read_document_page(
+    document_id: str,
+    page_number: int,
+    allowed_doc_ids: Annotated[list[str] | None, InjectedState("doc_ids")],
+) -> str:
     """Read the exact finalized text of one page.
 
     Use this to verify a quote or to read the context around something a search
@@ -136,6 +156,8 @@ async def read_document_page(document_id: str, page_number: int) -> str:
     def _load():
         from documents.models import Document
 
+        if not _document_is_allowed(document_id, allowed_doc_ids):
+            return "document is outside this conversation's selected sources"
         document = Document.objects.select_related("current_revision").filter(
             id=document_id
         ).first()
@@ -150,7 +172,12 @@ async def read_document_page(document_id: str, page_number: int) -> str:
 
 
 @tool
-async def get_chunk_context(chunk_id: str, before: int = 1, after: int = 1) -> str:
+async def get_chunk_context(
+    chunk_id: str,
+    allowed_doc_ids: Annotated[list[str] | None, InjectedState("doc_ids")],
+    before: int = 1,
+    after: int = 1,
+) -> str:
     """Expand a retrieved passage with its neighbouring passages.
 
     Use when a search result looks relevant but is cut off mid-thought.
@@ -163,6 +190,8 @@ async def get_chunk_context(chunk_id: str, before: int = 1, after: int = 1) -> s
         chunk = Chunk.objects.filter(id=chunk_id).first()
         if not chunk:
             return f"no such chunk {chunk_id}"
+        if not _document_is_allowed(str(chunk.document_id), allowed_doc_ids):
+            return "chunk is outside this conversation's selected sources"
         neighbours = Chunk.objects.filter(
             revision_id=chunk.revision_id,
             chunk_index__gte=chunk.chunk_index - before,
@@ -171,6 +200,15 @@ async def get_chunk_context(chunk_id: str, before: int = 1, after: int = 1) -> s
         return "\n\n".join(c.text for c in neighbours)
 
     return await _load()
+
+
+def _document_is_allowed(
+    document_id: str, allowed_doc_ids: list[str] | None
+) -> bool:
+    """None means library-wide; a list is an authoritative allow-list."""
+    return allowed_doc_ids is None or str(document_id) in {
+        str(allowed_id) for allowed_id in allowed_doc_ids
+    }
 
 
 TOOLS = [

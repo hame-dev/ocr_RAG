@@ -1,0 +1,57 @@
+from __future__ import annotations
+
+from typing import Literal, TypedDict
+
+
+ResearchMode = Literal["fast", "balanced", "deep"]
+DEFAULT_RESEARCH_MODE: ResearchMode = "balanced"
+
+
+class ResearchProfile(TypedDict):
+    top_k: int
+    excerpt_chars: int
+    max_tool_rounds: int
+    instruction: str
+
+
+RESEARCH_PROFILES: dict[ResearchMode, ResearchProfile] = {
+    "fast": {
+        "top_k": 5,
+        "excerpt_chars": 500,
+        "max_tool_rounds": 2,
+        "instruction": (
+            "Research effort is FAST. Run one focused document search, then answer "
+            "concisely from the strongest evidence. Expand context only when the top "
+            "passage is incomplete."
+        ),
+    },
+    "balanced": {
+        "top_k": 8,
+        "excerpt_chars": 500,
+        "max_tool_rounds": 5,
+        "instruction": (
+            "Research effort is BALANCED. Refine the query or expand a promising "
+            "passage when that materially improves the answer. Prefer corroborated, "
+            "well-scoped evidence over extra searches."
+        ),
+    },
+    "deep": {
+        "top_k": 10,
+        "excerpt_chars": 350,
+        "max_tool_rounds": 8,
+        "instruction": (
+            "Research effort is DEEP. Search with at least two meaningfully different "
+            "query formulations, compare the results, then verify the strongest evidence "
+            "with neighbouring chunks or the original page before answering."
+        ),
+    },
+}
+
+
+def normalize_research_mode(value: object) -> ResearchMode | None:
+    return value if isinstance(value, str) and value in RESEARCH_PROFILES else None
+
+
+def research_profile(mode: str) -> ResearchProfile:
+    normalized = normalize_research_mode(mode) or DEFAULT_RESEARCH_MODE
+    return RESEARCH_PROFILES[normalized]

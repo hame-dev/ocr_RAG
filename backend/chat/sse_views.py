@@ -29,6 +29,7 @@ async def chat_stream(request, conversation_id):
 
     from chat.graph import SCOPE_ALL, SCOPE_SELECTED, get_graph, resolve_citations
     from chat.models import Conversation, Message
+    from chat.research import DEFAULT_RESEARCH_MODE, normalize_research_mode
     from documents.models import Document
 
     try:
@@ -40,6 +41,13 @@ async def chat_stream(request, conversation_id):
     if not content:
         return JsonResponse({"detail": "content is required"}, status=400)
 
+    requested_mode = body.get("research_mode", DEFAULT_RESEARCH_MODE)
+    research_mode = normalize_research_mode(requested_mode)
+    if research_mode is None:
+        return JsonResponse(
+            {"detail": "research_mode must be fast, balanced or deep"}, status=400
+        )
+
     try:
         conversation = await Conversation.objects.aget(id=conversation_id)
     except Conversation.DoesNotExist:
@@ -48,7 +56,7 @@ async def chat_stream(request, conversation_id):
     await Message.objects.acreate(conversation=conversation, role="user", content=content)
 
     doc_ids = conversation.scoped_document_ids()
-    if doc_ids:
+    if doc_ids is not None:
         titles = []
         async for document in Document.objects.filter(id__in=doc_ids):
             titles.append(document.display_title)
@@ -67,6 +75,7 @@ async def chat_stream(request, conversation_id):
 
         buffer: list[str] = []
         retrieved: dict = {}
+        search_starts = 0
         started = time.monotonic()
 
         try:
@@ -82,7 +91,8 @@ async def chat_stream(request, conversation_id):
                     "messages": [HumanMessage(content=content)],
                     "doc_ids": doc_ids,
                     "scope_note": scope_note,
-                    "tool_iterations": 0,
+                    "research_mode": research_mode,
+                    "tool_rounds": 0,
                     "retrieved": {},
                     "summary": "",
                 },
@@ -99,9 +109,17 @@ async def chat_stream(request, conversation_id):
                         yield sse("token", {"t": token})
 
                 elif kind == "on_tool_start":
+                    tool_name = event["name"]
+                    phase = _tool_phase(tool_name, search_starts)
+                    if tool_name == "search_documents":
+                        search_starts += 1
                     yield sse(
                         "tool_start",
-                        {"name": event["name"], "args": _safe(event["data"].get("input"))},
+                        {
+                            "name": tool_name,
+                            "phase": phase,
+                            "args": _safe(event["data"].get("input")),
+                        },
                     )
 
                 elif kind == "on_tool_end":
@@ -123,6 +141,7 @@ async def chat_stream(request, conversation_id):
                 citation_mode=mode,
                 latency_ms=int((time.monotonic() - started) * 1000),
                 model_id=_model_id(),
+                usage={"research_mode": research_mode},
             )
             yield sse(
                 "done",
@@ -132,6 +151,7 @@ async def chat_stream(request, conversation_id):
                     "citations": citations,
                     "citation_mode": mode,
                     "latency_ms": message.latency_ms,
+                    "research_mode": research_mode,
                 },
             )
 
@@ -168,6 +188,14 @@ def _model_id() -> str:
     from django.conf import settings
 
     return settings.LLM_MODEL
+
+
+def _tool_phase(tool_name: str, search_starts: int) -> str:
+    if tool_name == "search_documents":
+        return "searching" if search_starts == 0 else "comparing"
+    if tool_name in {"get_chunk_context", "read_document_page", "get_document_metadata"}:
+        return "verifying"
+    return "reviewing"
 
 
 def _extract_hits(output) -> list[dict]:

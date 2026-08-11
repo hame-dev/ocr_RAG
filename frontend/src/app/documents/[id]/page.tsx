@@ -30,6 +30,7 @@ export default function DocumentPage() {
   const [selected, setSelected] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const batchRef = useRef<string | null>(null);
+  const defaultEngineAppliedRef = useRef(false);
 
   const { data: doc, refetch: refetchDoc } = useQuery({
     queryKey: ["document", id],
@@ -37,6 +38,15 @@ export default function DocumentPage() {
   });
   const { data: engineData } = useQuery({ queryKey: ["engines"], queryFn: () => listEngines() });
   const engines = engineData?.engines ?? [];
+
+  useEffect(() => {
+    if (!engineData || defaultEngineAppliedRef.current) return;
+    defaultEngineAppliedRef.current = true;
+    const defaultEngine = engineData.engines.find(
+      (engine) => engine.name === engineData.default_engine && engine.available,
+    );
+    if (defaultEngine) setSelected([defaultEngine.name]);
+  }, [engineData]);
 
   const { data: metadata, refetch: refetchMetadata } = useQuery({
     queryKey: ["metadata", id],

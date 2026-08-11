@@ -1,8 +1,9 @@
 "use client";
 
-import { memo } from "react";
+import { Children, isValidElement, memo } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { MermaidDiagram } from "./MermaidDiagram";
 
 interface Props {
   children: string;
@@ -37,6 +38,17 @@ export const Markdown = memo(function Markdown({ children, onAccent }: Props) {
               <table {...props} />
             </div>
           ),
+          code: ({ node, className, children, ...props }) => {
+            if (className?.split(" ").includes("language-mermaid")) {
+              return <MermaidDiagram source={String(children).replace(/\n$/, "")} />;
+            }
+            return <code className={className} {...props}>{children}</code>;
+          },
+          pre: ({ node, children, ...props }) => {
+            const child = Children.count(children) === 1 ? Children.only(children) : null;
+            if (isValidElement(child) && child.type === MermaidDiagram) return <>{child}</>;
+            return <pre {...props}>{children}</pre>;
+          },
         }}
       >
         {children}

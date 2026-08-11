@@ -1,147 +1,158 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { api, createConversation } from "@/lib/api";
+import { useQuery } from "@tanstack/react-query";
+import { api, ConversationSummary } from "@/lib/api";
 import { useLocale } from "./Providers";
 
-interface Conversation {
-  id: string;
-  title: string | null;
-  scope: string;
-  document_ids: string[];
-  updated_at?: string;
-  created_at?: string;
+interface ChatSidebarProps {
+  activeId?: string;
+  collapsed: boolean;
+  mobileOpen: boolean;
+  onCollapse: () => void;
+  onMobileClose: () => void;
 }
 
-/**
- * Conversation history rail, in the ChatGPT/Claude idiom: a persistent list of
- * past chats on the inline-start edge, with the active one highlighted.
- *
- * It collapses to a drawer under `lg` so the chat column keeps its full width
- * on a phone. `start-0` / `ps-*` are logical, so the rail sits on the right in
- * Arabic without a second set of rules.
- */
-export function ChatSidebar({ activeId }: { activeId?: string }) {
-  const { t } = useLocale();
-  const router = useRouter();
-  const queryClient = useQueryClient();
-  const [open, setOpen] = useState(false);
-  const [creating, setCreating] = useState(false);
-
+export function ChatSidebar({
+  activeId,
+  collapsed,
+  mobileOpen,
+  onCollapse,
+  onMobileClose,
+}: ChatSidebarProps) {
+  const { t, locale, setLocale } = useLocale();
   const { data } = useQuery({
     queryKey: ["conversations"],
-    queryFn: () => api<{ results: Conversation[] }>("/api/conversations/"),
+    queryFn: () => api<{ results: ConversationSummary[] }>("/api/conversations/"),
   });
 
   const conversations = data?.results ?? [];
 
-  async function startNew() {
-    if (creating) return;
-    setCreating(true);
-    try {
-      const conversation = await createConversation("all");
-      await queryClient.invalidateQueries({ queryKey: ["conversations"] });
-      setOpen(false);
-      router.push(`/chat/${conversation.id}`);
-    } finally {
-      setCreating(false);
-    }
-  }
+  const content = (mobile: boolean) => (
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="flex items-center gap-2 px-3 py-3">
+        <Link href="/" className="min-w-0 flex-1 truncate text-sm font-semibold">
+          {t("appName")}
+        </Link>
+        <button
+          type="button"
+          onClick={mobile ? onMobileClose : onCollapse}
+          className="grid h-8 w-8 place-items-center rounded-lg text-lg hover:bg-[var(--hover)]"
+          aria-label={mobile ? t("close") : t("hideSidebar")}
+          title={mobile ? t("close") : t("hideSidebar")}
+        >
+          {mobile ? "×" : <span className="flip-rtl">‹</span>}
+        </button>
+      </div>
 
-  const list = (
-    <div className="flex h-full flex-col gap-3">
-      <button
-        onClick={startNew}
-        disabled={creating}
-        className="rounded-lg px-3 py-2 text-sm font-medium text-white disabled:opacity-50"
-        style={{ background: "var(--accent)" }}
-      >
-        + {t("newChat")}
-      </button>
+      <div className="px-3 pb-2">
+        <Link
+          href="/chat"
+          onClick={onMobileClose}
+          className="flex items-center gap-2 rounded-xl border px-3 py-2.5 text-sm font-medium hover:bg-[var(--hover)]"
+          style={{ borderColor: "var(--border)" }}
+        >
+          <span className="text-lg leading-none">＋</span>
+          {t("newChat")}
+        </Link>
+      </div>
 
-      <p className="px-1 text-xs font-medium uppercase tracking-wide"
-         style={{ color: "var(--muted)" }}>
-        {t("history")}
-      </p>
-
-      <nav className="-mx-1 flex-1 overflow-y-auto px-1">
-        {conversations.length === 0 && (
-          <p className="px-2 py-3 text-xs" style={{ color: "var(--muted)" }}>
-            {t("noConversations")}
-          </p>
-        )}
-
-        <ul className="space-y-0.5">
-          {conversations.map((c) => {
-            const active = c.id === activeId;
-            return (
-              <li key={c.id}>
-                <Link
-                  href={`/chat/${c.id}`}
-                  onClick={() => setOpen(false)}
-                  aria-current={active ? "page" : undefined}
-                  className="block rounded-lg px-2.5 py-2 transition-colors"
-                  style={{
-                    background: active ? "var(--hover)" : undefined,
-                    // The active row gets a hairline in the accent so it reads
-                    // as selected even when --hover is a very low-contrast fill.
-                    boxShadow: active ? "inset 2px 0 0 0 var(--accent)" : undefined,
-                  }}
-                >
-                  <span className="doc-text line-clamp-2 text-sm" dir="auto">
-                    {c.title || t("untitled")}
-                  </span>
-                  <span className="mt-0.5 block text-xs" style={{ color: "var(--muted)" }}>
-                    {c.scope === "selected"
-                      ? `${c.document_ids.length} doc${c.document_ids.length === 1 ? "" : "s"}`
-                      : t("wholeLibrary")}
-                  </span>
-                </Link>
-              </li>
-            );
-          })}
-        </ul>
+      <nav className="space-y-0.5 px-3 py-2 text-sm" aria-label={t("appNavigation")}>
+        <Link href="/" onClick={onMobileClose} className="chat-nav-link">
+          <span aria-hidden>▦</span><span>{t("library")}</span>
+        </Link>
+        <Link href="/upload" onClick={onMobileClose} className="chat-nav-link">
+          <span aria-hidden>↑</span><span>{t("upload")}</span>
+        </Link>
+        <Link href="/chat" onClick={onMobileClose} className="chat-nav-link chat-nav-active">
+          <span aria-hidden>◌</span><span>{t("chat")}</span>
+        </Link>
       </nav>
+
+      <div className="mt-2 flex min-h-0 flex-1 flex-col border-t px-3 pt-3"
+           style={{ borderColor: "var(--border)" }}>
+        <p className="px-2 pb-2 text-xs font-medium" style={{ color: "var(--muted)" }}>
+          {t("recentChats")}
+        </p>
+        <nav className="-mx-1 min-h-0 flex-1 overflow-y-auto px-1">
+          {conversations.length === 0 ? (
+            <p className="px-2 py-3 text-xs" style={{ color: "var(--muted)" }}>
+              {t("noConversations")}
+            </p>
+          ) : (
+            <ul className="space-y-0.5 pb-3">
+              {conversations.map((conversation) => {
+                const active = conversation.id === activeId;
+                return (
+                  <li key={conversation.id}>
+                    <Link
+                      href={`/chat/${conversation.id}`}
+                      onClick={onMobileClose}
+                      aria-current={active ? "page" : undefined}
+                      className="block rounded-xl px-2.5 py-2 transition-colors hover:bg-[var(--hover)]"
+                      style={{
+                        background: active ? "var(--hover)" : undefined,
+                        borderInlineStart: active ? "2px solid var(--accent)" : "2px solid transparent",
+                      }}
+                    >
+                      <span className="doc-text line-clamp-1 text-sm" dir="auto">
+                        {conversation.title || t("untitled")}
+                      </span>
+                      <span className="mt-0.5 block text-[11px]" style={{ color: "var(--muted)" }}>
+                        {conversation.scope === "selected"
+                          ? t("selectedSourceCount").replace("{count}", String(conversation.document_ids.length))
+                          : t("wholeLibrary")}
+                      </span>
+                    </Link>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </nav>
+      </div>
+
+      <div className="space-y-1 border-t p-3 text-sm" style={{ borderColor: "var(--border)" }}>
+        <Link href="/settings" onClick={onMobileClose} className="chat-nav-link">
+          <span aria-hidden>⚙</span><span>{t("settings")}</span>
+        </Link>
+        <button
+          type="button"
+          onClick={() => setLocale(locale === "ar" ? "en" : "ar")}
+          className="chat-nav-link w-full"
+        >
+          <span aria-hidden>文</span>
+          <span>{locale === "ar" ? "English" : "العربية"}</span>
+        </button>
+      </div>
     </div>
   );
 
   return (
     <>
-      {/* Mobile trigger */}
-      <button
-        onClick={() => setOpen(true)}
-        className="mb-3 rounded-md border px-3 py-1.5 text-sm lg:hidden"
-        style={{ borderColor: "var(--border)" }}
-        aria-expanded={open}
-      >
-        ☰ {t("history")}
-      </button>
+      {!collapsed && (
+        <aside
+          className="hidden h-dvh w-72 shrink-0 border-e lg:block"
+          style={{ background: "var(--sidebar)", borderColor: "var(--border)" }}
+        >
+          {content(false)}
+        </aside>
+      )}
 
-      {/* Desktop rail */}
-      <aside
-        className="hidden w-64 shrink-0 border-e pe-3 lg:block"
-        style={{ borderColor: "var(--border)" }}
-      >
-        {list}
-      </aside>
-
-      {/* Mobile drawer */}
-      {open && (
-        <div className="fixed inset-0 z-30 lg:hidden">
-          <div
-            className="absolute inset-0 bg-black/50"
-            onClick={() => setOpen(false)}
-            aria-hidden
+      {mobileOpen && (
+        <div className="fixed inset-0 z-50 lg:hidden">
+          <button
+            type="button"
+            className="absolute inset-0 bg-black/45"
+            onClick={onMobileClose}
+            aria-label={t("close")}
           />
-          <div
-            className="absolute inset-y-0 start-0 w-72 max-w-[85vw] p-4 shadow-xl"
-            style={{ background: "var(--bg)" }}
+          <aside
+            className="absolute inset-y-0 start-0 w-72 max-w-[88vw] border-e shadow-2xl"
+            style={{ background: "var(--sidebar)", borderColor: "var(--border)" }}
           >
-            {list}
-          </div>
+            {content(true)}
+          </aside>
         </div>
       )}
     </>

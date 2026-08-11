@@ -1,4 +1,7 @@
-FROM python:3.11-slim
+# Debian trixie ships tesseract 5.5 (5.3 on bookworm) at the SAME
+# /usr/share/tesseract-ocr/5/tessdata path, so the tessdata volume mount and the
+# Arabic language packs carry over from the 3.11-slim image unchanged.
+FROM python:3.13-slim-trixie
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -28,8 +31,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
+# Upgrading pip first matters on 3.13: older pip resolves some of the pinned
+# wheels to sdists and then tries to compile them.
 COPY backend/requirements.txt /app/requirements.txt
-RUN pip install -r /app/requirements.txt
+RUN pip install --upgrade pip setuptools wheel \
+    && pip install -r /app/requirements.txt
 
 COPY backend/ /app/
 

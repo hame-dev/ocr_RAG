@@ -96,6 +96,39 @@ export interface Citation {
   quote: string;
 }
 
+export type ResearchMode = "fast" | "balanced" | "deep";
+
+export interface SelectedDocument {
+  id: string;
+  display_title: string;
+  original_filename: string;
+}
+
+export interface ConversationSummary {
+  id: string;
+  title: string | null;
+  scope: "all" | "selected";
+  document_ids: string[];
+  selected_documents: SelectedDocument[];
+  message_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ConversationMessage {
+  seq: number;
+  role: "user" | "assistant" | "tool" | "system";
+  content: string;
+  citations: Citation[];
+  citation_mode: string;
+  is_partial: boolean;
+  error: string;
+}
+
+export interface ConversationDetail extends ConversationSummary {
+  messages: ConversationMessage[];
+}
+
 // ---- Calls -----------------------------------------------------------------
 
 export const listDocuments = () =>
@@ -104,7 +137,9 @@ export const listDocuments = () =>
 export const getDocument = (id: string) => api<any>(`/api/documents/${id}/`);
 
 export const listEngines = (refresh = false) =>
-  api<{ engines: Engine[] }>(`/api/ocr/engines/${refresh ? "?refresh=1" : ""}`);
+  api<{ engines: Engine[]; default_engine: string }>(
+    `/api/ocr/engines/${refresh ? "?refresh=1" : ""}`,
+  );
 
 export const uploadDocument = (file: File, title?: string) => {
   const form = new FormData();
@@ -153,9 +188,21 @@ export const getMetadata = (documentId: string) =>
   api<any>(`/api/documents/${documentId}/metadata/`);
 
 export const createConversation = (scope: "all" | "selected", documentIds: string[] = []) =>
-  api<any>("/api/conversations/", {
+  api<ConversationDetail>("/api/conversations/", {
     method: "POST",
     body: JSON.stringify({ scope, document_ids: documentIds }),
+  });
+
+export const updateConversationScope = (
+  conversationId: string,
+  documentIds: string[],
+) =>
+  api<ConversationDetail>(`/api/conversations/${conversationId}/`, {
+    method: "PATCH",
+    body: JSON.stringify({
+      scope: documentIds.length ? "selected" : "all",
+      document_ids: documentIds,
+    }),
   });
 
 export const pageImageUrl = (documentId: string, page: number, profile = "neural") =>

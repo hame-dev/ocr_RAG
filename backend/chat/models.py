@@ -32,7 +32,7 @@ class Conversation(models.Model):
 
     def scoped_document_ids(self) -> list[str] | None:
         """None means "search everything"."""
-        if self.scope == "selected" and self.document_ids:
+        if self.scope == "selected":
             return [str(d) for d in self.document_ids]
         return None
 

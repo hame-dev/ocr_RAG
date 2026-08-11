@@ -1,10 +1,16 @@
 "use client";
 
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 import { useLocale } from "./Providers";
 
 export function Shell({ children }: { children: React.ReactNode }) {
   const { t, locale, setLocale } = useLocale();
+  const pathname = usePathname();
+
+  if (pathname.startsWith("/chat")) {
+    return <>{children}</>;
+  }
 
   return (
     <div className="min-h-screen">

@@ -11,6 +11,7 @@ OLLAMA_HOST_URL="${OLLAMA_HOST_URL:-http://localhost:11434}"
 REQUIRED=(
   "qwen3.5:9b"                    # agent, AI correction (vision), metadata
   "bge-m3"                        # embeddings — multilingual, 1024-dim
+  "fredrezones55/chandra-ocr-2:latest" # default layout-aware OCR
   "melashri/surya-ocr-2:q4_k_m"   # layout-aware OCR, 609MB
 )
 

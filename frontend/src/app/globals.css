@@ -21,6 +21,9 @@
   --card: #ffffff;
   --hover: #f3f4f6;
   --code-bg: #f3f4f6;
+  --sidebar: #f7f7f5;
+  --user-bubble: #f1f1ef;
+  --composer: #ffffff;
 
   /* Accent defaults to blue; data-accent overrides both light and dark pairs. */
   --accent: #2563eb;
@@ -37,6 +40,9 @@
     --card: #111827;
     --hover: #1a2233;
     --code-bg: #1a2233;
+    --sidebar: #0e1420;
+    --user-bubble: #1a2233;
+    --composer: #111827;
     --accent: var(--accent-dark);
   }
 }
@@ -50,6 +56,9 @@
   --card: #111827;
   --hover: #1a2233;
   --code-bg: #1a2233;
+  --sidebar: #0e1420;
+  --user-bubble: #1a2233;
+  --composer: #111827;
   --accent: var(--accent-dark);
 }
 
@@ -112,6 +121,74 @@ body {
   background: var(--card);
   border: 1px solid var(--border);
   border-radius: 0.75rem;
+}
+
+/* ---- Chat workspace ------------------------------------------------------ */
+.chat-nav-link {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  width: 100%;
+  min-height: 2.25rem;
+  border-radius: 0.75rem;
+  padding: 0.45rem 0.65rem;
+  text-align: start;
+  transition: background-color 150ms ease;
+}
+
+.chat-nav-link:hover,
+.chat-nav-active {
+  background: var(--hover);
+}
+
+.composer-shell {
+  overflow: visible;
+  border: 1px solid var(--border);
+  border-radius: 1.25rem;
+  background: var(--composer);
+  box-shadow: 0 8px 28px rgb(15 23 42 / 0.08);
+}
+
+:root[data-theme="dark"] .composer-shell {
+  box-shadow: 0 12px 35px rgb(0 0 0 / 0.28);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .composer-shell {
+    box-shadow: 0 12px 35px rgb(0 0 0 / 0.28);
+  }
+}
+
+.composer-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  min-height: 2.1rem;
+  max-width: 11rem;
+  border-radius: 9999px;
+  padding-inline: 0.65rem;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 0.75rem;
+  line-height: 1;
+  cursor: pointer;
+  outline: none;
+}
+
+.composer-control:hover,
+.composer-control:focus-visible {
+  background: var(--hover);
+  color: var(--fg);
+}
+
+.composer-control:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.chat-composer-dock {
+  background: linear-gradient(to bottom, transparent, var(--bg) 1.25rem);
 }
 
 /* Directional icons must flip in RTL. */
@@ -212,6 +289,22 @@ body {
 .md th { background: var(--hover); font-weight: 600; }
 
 .md hr { border: 0; border-top: 1px solid var(--border); margin-block: 1em; }
+
+.mermaid-diagram {
+  margin-block: 1rem;
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  background: var(--card);
+  padding: 0.75rem;
+}
+
+.mermaid-diagram svg {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  height: auto;
+  margin-inline: auto;
+}
 
 /* The user bubble is filled with --accent, so markdown inside it inherits
    white and needs its own surfaces. */
