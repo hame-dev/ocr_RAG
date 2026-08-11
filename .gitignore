@@ -65,6 +65,9 @@ yarn-error.log*
 # whose bytes change on every regeneration, so tracking them makes noisy diffs.
 backend/tests/fixtures/*.pdf
 
+# ---- Docs -------------------------------------------------------------------
+docs/
+
 # ---- OS / editor ------------------------------------------------------------
 .DS_Store
 Thumbs.db

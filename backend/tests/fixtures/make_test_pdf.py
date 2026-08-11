@@ -28,10 +28,13 @@ REF_NUMBER = "REF/2026/AR-0417"
 AMOUNT_EN = "12,500"
 AMOUNT_AR = "١٢٬٥٠٠"
 TAX_EN = "1,875"
+# Same instant in both calendars — 2026-01-15 == 26 Rajab 1447 AH. These must
+# stay in sync: the document states both, so a mismatch would make the fixture
+# itself internally inconsistent and mask real date/digit errors from the model.
 GREGORIAN = "2026-01-15"
-HIJRI = "١٥ رجب ١٤٤٧ هـ"
-ORG_AR = "شركة النور للتجارة المحدودة"
-ORG_EN = "Al-Noor Trading Ltd"
+HIJRI = "٢٦ رجب ١٤٤٧ هـ"
+ORG_AR = "شركة هامي للتجارة المحدودة"
+ORG_EN = "Hame Trading Ltd"
 PERSON_EN = "Ahmed Al-Rashid"
 PERSON_AR = "أحمد الراشد"
 
