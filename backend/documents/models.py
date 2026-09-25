@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import uuid
 
+from django.conf import settings
 from django.contrib.postgres.fields import ArrayField
 from django.db import models
 
@@ -10,6 +11,15 @@ from common import fsm
 
 class Document(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    # Nullable only so pre-login rows survive the migration; they stay invisible
+    # until `manage.py claim_unowned` assigns them. Every API path filters on it.
+    owner = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.CASCADE,
+        related_name="documents",
+    )
     title = models.CharField(max_length=512, blank=True)
     original_filename = models.CharField(max_length=512)
     mime_type = models.CharField(max_length=128)

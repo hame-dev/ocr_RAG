@@ -5,7 +5,7 @@ edit it yourself or have AI correct it → get structured metadata → chat with
 
 Built for **bilingual Arabic/English documents**, where a single page mixes both
 scripts and most OCR pipelines quietly fall apart. Runs entirely on your own
-machine: fully dockerized, no login, no cloud API keys. Ollama runs on the host
+machine: fully dockerized, no cloud API keys. Ollama runs on the host
 so it gets the GPU; everything else is a container.
 
 ![Choosing OCR engines and comparing their output](assets/upload_file.png)
@@ -47,7 +47,16 @@ the agent is allowed before it must answer.
 
 ![Chat entry point with source scoping and research depth](assets/chat_screen.png)
 
-The interface is **RTL-first** and switches between Arabic and English.
+**Or just talk to the model.** A **Documents / General** switch in the composer
+picks the mode per message. General mode is the plain LLM: no tools, no search,
+no citations, and no access to your library, which is useful for drafting,
+translating or general questions without leaving the conversation.
+
+**Private accounts.** Every user signs in and sees only their own documents and
+chats. Retrieval, the agent's tools and every endpoint are scoped to the owner.
+Accounts are created by an operator; there is no public sign-up.
+
+The interface defaults to English and switches to Arabic with full RTL layout; the choice is remembered per browser.
 
 ---
 
@@ -62,17 +71,21 @@ The interface is **RTL-first** and switches between Arabic and English.
 
 ```bash
 cp .env.example .env
-make warmup    # pulls the host Ollama models
+make warmup              # pulls the host Ollama models
 make up
+make createuser U=alice  # prompts for a password; add STAFF=1 for staff
 ```
 
-Then open <http://localhost:3000>. `make help` lists every target.
+Then open <http://localhost:3000> and sign in. `make help` lists every target.
 
 ```bash
 make fixtures  # generate the bilingual test PDFs
-make test      # focused backend regressions
-make smoke     # full live pipeline, ~1–2 minutes, uses Ollama
+make test      # backend test suite
+SMOKE_USERNAME=alice SMOKE_PASSWORD=... make smoke   # full live pipeline, ~1–2 min
 ```
+
+**Upgrading from a version without login?** Existing documents and chats have no
+owner and stay hidden until you assign them: `make claim U=alice`.
 
 A `bundled-ollama` compose profile exists for portability, but on macOS it is
 much slower — Docker has no GPU passthrough there, so a VLM OCR page takes
@@ -90,7 +103,28 @@ Browser ──SSE──> Django (ASGI/uvicorn) ──> Postgres 17 + pgvector
    └──> Next.js 15                                          qwen3.5:9b, bge-m3, surya-ocr-2
 ```
 
-Backend is 6 Django apps and 40+ endpoints; frontend is Next.js 15.
+Backend is 7 Django apps and 40+ endpoints; frontend is Next.js 15 with Tailwind, shadcn/ui (Radix) components and lucide icons, RTL-aware throughout.
+
+### Authentication
+
+- **Django session cookie (HttpOnly), not JWT.** The browser talks to Django
+  directly so SSE is never buffered, and `EventSource` cannot send headers but
+  does send cookies (`withCredentials`).
+- **CSRF is enforced on every write**, including login and the chat stream. The
+  token comes back in JSON (`/api/auth/csrf/`, login, `me`) and the SPA keeps it
+  in memory, so it works even when the API and frontend are different origins.
+- **Anonymous requests get 401**, and another user's resource is a **404**, so
+  the API never confirms that someone else's document exists.
+- **Isolation lives in the data path.** `Document` and `Conversation` carry an
+  owner; everything else inherits it through its document. The agent always gets
+  an explicit list of the user's document ids. An empty list means nothing is
+  searchable, and it never widens to "the whole corpus".
+- **Login is throttled** per IP + username (`LOGIN_THROTTLE_RATE`), counted in
+  Redis so it holds across uvicorn workers.
+- The frontend and API must share a site (e.g. `localhost:3000` + `localhost:8000`,
+  or `app.example.com` + `api.example.com`) for the `SameSite=Lax` cookie to be
+  sent. List the frontend origin in `CORS_ALLOWED_ORIGINS` / `CSRF_TRUSTED_ORIGINS`,
+  and set `SESSION_COOKIE_SECURE=1` / `CSRF_COOKIE_SECURE=1` behind HTTPS.
 
 ### Key decisions and why
 
@@ -206,9 +240,9 @@ Not built yet:
 - **Page image viewer with bbox overlay.** Tesseract returns the boxes and the
   API serves them; nothing renders them.
 - **Diff view.** `grapheme_opcodes` and the endpoint exist; no UI.
-- **Broad test coverage.** The focused suite covers the critical wiring and the
-  correction guards; most serializers, FSM transitions and retry/failure paths
-  still need dedicated tests.
+- **Broad test coverage.** The suite covers auth, per-user isolation, chat modes,
+  the critical wiring and the correction guards; most serializers, FSM transitions
+  and retry/failure paths still need dedicated tests.
 
 Contributions welcome, particularly on the sidecars and the bbox/diff UI.
 

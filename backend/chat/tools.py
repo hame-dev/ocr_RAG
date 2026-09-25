@@ -44,13 +44,21 @@ async def search_documents(
     if allowed_doc_ids == []:
         return []
     profile = research_profile(research_mode)
-    hits = await sync_to_async(hybrid_search, thread_sensitive=True)(
+    search = sync_to_async(hybrid_search, thread_sensitive=True)
+    hits = await search(
         query,
         top_k=profile["top_k"],
         doc_ids=allowed_doc_ids,
         doc_type=doc_type,
         lang=lang,
     )
+    # The model guesses these filters ("lease" for a document classified as
+    # "contract"), and an empty result then reads as "you have no such
+    # document". Treat them as hints: if they eliminate everything, search again
+    # without them.
+    if not hits and (doc_type or lang):
+        logger.info("filtered search empty (doc_type=%r lang=%r); retrying unfiltered", doc_type, lang)
+        hits = await search(query, top_k=profile["top_k"], doc_ids=allowed_doc_ids)
     return format_hits(hits, max_chars=profile["excerpt_chars"])
 
 

@@ -4,10 +4,15 @@ from django.urls import resolve
 from documents.sse_views import document_events
 
 
-def test_no_auth_api_does_not_import_django_auth(client):
-    assert "django.contrib.auth" not in settings.INSTALLED_APPS
-    assert settings.REST_FRAMEWORK["UNAUTHENTICATED_USER"] is None
+def test_api_requires_a_session_by_default():
+    assert settings.REST_FRAMEWORK["DEFAULT_PERMISSION_CLASSES"] == [
+        "rest_framework.permissions.IsAuthenticated"
+    ]
+    assert settings.CORS_ALLOW_CREDENTIALS is True
+    assert not getattr(settings, "CORS_ALLOW_ALL_ORIGINS", False)
 
+
+def test_liveness_probe_stays_public(client):
     response = client.get("/api/health/")
 
     assert response.status_code == 200

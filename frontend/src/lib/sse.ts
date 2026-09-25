@@ -1,4 +1,4 @@
-import { API_BASE, ResearchMode } from "./api";
+import { API_BASE, ChatMode, ResearchMode, authHeaders, notifyUnauthorized } from "./api";
 
 /**
  * Subscribe to a document's lifecycle + OCR progress stream.
@@ -11,7 +11,10 @@ export function subscribeToDocument(
   documentId: string,
   handlers: Record<string, (data: any) => void>,
 ): () => void {
-  const source = new EventSource(`${API_BASE}/api/documents/${documentId}/events/`);
+  // withCredentials sends the session cookie; EventSource cannot set headers.
+  const source = new EventSource(`${API_BASE}/api/documents/${documentId}/events/`, {
+    withCredentials: true,
+  });
 
   const registered: Array<[string, EventListener]> = [];
   for (const [event, handler] of Object.entries(handlers)) {
@@ -34,6 +37,8 @@ export function subscribeToDocument(
 
 export interface StreamHandlers {
   onToken?: (t: string) => void;
+  /** The text streamed so far was a tool-calling turn, not the answer: clear it. */
+  onReset?: () => void;
   onToolStart?: (name: string, args: unknown, phase?: string) => void;
   onToolEnd?: (name: string, hits: number) => void;
   onDone?: (payload: any) => void;
@@ -50,18 +55,39 @@ export async function streamChat(
   conversationId: string,
   content: string,
   researchMode: ResearchMode,
+  chatMode: ChatMode,
   handlers: StreamHandlers,
   signal?: AbortSignal,
 ): Promise<void> {
-  const res = await fetch(`${API_BASE}/api/conversations/${conversationId}/stream/`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ content, research_mode: researchMode }),
-    signal,
-  });
+  const send = async (forceCsrf: boolean) =>
+    fetch(`${API_BASE}/api/conversations/${conversationId}/stream/`, {
+      method: "POST",
+      credentials: "include",
+      headers: {
+        "Content-Type": "application/json",
+        ...(await authHeaders("POST", forceCsrf)),
+      },
+      body: JSON.stringify({ content, research_mode: researchMode, chat_mode: chatMode }),
+      signal,
+    });
 
+  let res = await send(false);
+  // Stale CSRF token (rotated by a login elsewhere): refresh once and retry.
+  if (res.status === 403) res = await send(true);
+
+  if (res.status === 401) {
+    notifyUnauthorized();
+    handlers.onError?.("session expired");
+    return;
+  }
   if (!res.ok || !res.body) {
-    handlers.onError?.(`stream failed: ${res.status}`);
+    let detail = `stream failed: ${res.status}`;
+    try {
+      detail = ((await res.json()) as { detail?: string }).detail ?? detail;
+    } catch {
+      /* non-JSON error body */
+    }
+    handlers.onError?.(detail);
     return;
   }
 
@@ -97,6 +123,7 @@ export async function streamChat(
 
       switch (event) {
         case "token": handlers.onToken?.(payload.t); break;
+        case "reset": handlers.onReset?.(); break;
         case "tool_start": handlers.onToolStart?.(payload.name, payload.args, payload.phase); break;
         case "tool_end": handlers.onToolEnd?.(payload.name, payload.hits); break;
         case "done": handlers.onDone?.(payload); break;

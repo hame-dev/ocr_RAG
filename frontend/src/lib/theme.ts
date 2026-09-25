@@ -1,3 +1,5 @@
+import { LOCALE_KEY } from "./i18n";
+
 export type ThemeMode = "system" | "light" | "dark";
 export type Accent = "blue" | "violet" | "emerald" | "amber" | "rose" | "teal";
 
@@ -53,9 +55,12 @@ export function applyTheme(mode: ThemeMode, accent: Accent) {
 
 /**
  * Runs before first paint (injected as a blocking inline script) so a dark-theme
- * user never sees a white flash while React hydrates.
+ * user never sees a white flash, and an Arabic user never sees the page flip
+ * from LTR to RTL, while React hydrates.
  */
 export const THEME_INIT_SCRIPT = `(function(){try{
+var l=localStorage.getItem(${JSON.stringify(LOCALE_KEY)});
+if(l==="ar"||l==="en"){document.documentElement.lang=l;document.documentElement.dir=l==="ar"?"rtl":"ltr";}
 var m=localStorage.getItem(${JSON.stringify(MODE_KEY)});
 var a=localStorage.getItem(${JSON.stringify(ACCENT_KEY)});
 var r=document.documentElement;

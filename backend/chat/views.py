@@ -5,16 +5,22 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 
 from chat.models import Conversation, Message
-from documents.models import Document
+from chat.research import DEFAULT_CHAT_MODE
+from common.ownership import CHAT_READY_STATUSES, owned_documents
 
 
 class MessageSerializer(serializers.ModelSerializer):
+    chat_mode = serializers.SerializerMethodField()
+
     class Meta:
         model = Message
         fields = [
             "seq", "role", "content", "tool_calls", "citations", "citation_mode",
-            "latency_ms", "model_id", "is_partial", "error", "created_at",
+            "chat_mode", "latency_ms", "model_id", "is_partial", "error", "created_at",
         ]
+
+    def get_chat_mode(self, obj) -> str:
+        return (obj.usage or {}).get("chat_mode", DEFAULT_CHAT_MODE)
 
 
 class ConversationSerializer(serializers.ModelSerializer):
@@ -36,7 +42,7 @@ class ConversationSerializer(serializers.ModelSerializer):
             return []
         documents = {
             str(document.id): document
-            for document in Document.objects.filter(id__in=obj.document_ids)
+            for document in owned_documents(obj.owner_id).filter(id__in=obj.document_ids)
         }
         return [
             {
@@ -68,9 +74,11 @@ class ConversationSerializer(serializers.ModelSerializer):
                 {"document_ids": "select at least one available document"}
             )
 
+        # Another user's document is reported as "unavailable", exactly like a
+        # missing one, so scoping cannot be used to probe for other users' ids.
         available_ids = set(
-            Document.objects.filter(
-                id__in=document_ids, status__in=["ready", "indexed"]
+            owned_documents(self.context["request"].user).filter(
+                id__in=document_ids, status__in=CHAT_READY_STATUSES
             ).values_list("id", flat=True)
         )
         missing = [str(document_id) for document_id in document_ids if document_id not in available_ids]
@@ -92,6 +100,12 @@ class ConversationDetailSerializer(ConversationSerializer):
 
 class ConversationViewSet(viewsets.ModelViewSet):
     queryset = Conversation.objects.prefetch_related("messages").all()
+
+    def get_queryset(self):
+        return super().get_queryset().filter(owner=self.request.user)
+
+    def perform_create(self, serializer):
+        serializer.save(owner=self.request.user)
 
     def get_serializer_class(self):
         return (

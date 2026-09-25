@@ -12,9 +12,10 @@ import logging
 
 import redis.asyncio as aioredis
 from django.conf import settings
-from django.http import StreamingHttpResponse
+from django.http import JsonResponse, StreamingHttpResponse
 
 from common.fsm import channel
+from common.ownership import authenticated_user, owned_documents, unauthorized
 from common.sse import HEARTBEAT, sse, stream_headers
 
 logger = logging.getLogger(__name__)
@@ -82,6 +83,13 @@ async def _snapshot(document_id: str) -> dict:
 
 async def document_events(request, document_id: str):
     """Live document lifecycle + OCR progress stream."""
+    user = await authenticated_user(request)
+    if user is None:
+        return unauthorized()
+    # Checked before the stream opens: a non-200 makes EventSource stop instead
+    # of reconnecting forever.
+    if not await owned_documents(user).filter(id=document_id).aexists():
+        return JsonResponse({"detail": "no such document"}, status=404)
 
     async def generator():
         client = None

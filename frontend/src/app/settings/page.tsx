@@ -1,181 +1,331 @@
 "use client";
 
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { api, listEngines } from "@/lib/api";
-import { num } from "@/lib/i18n";
+import { toast } from "sonner";
+import {
+  Check, CheckCircle2, Copy, Loader2, Monitor, Moon, RefreshCw, Sun, XCircle,
+} from "lucide-react";
+import { ApiError, api, changePassword, Engine, listEngines } from "@/lib/api";
+import { fmt, num, StringKey } from "@/lib/i18n";
+import { ACCENTS, ThemeMode } from "@/lib/theme";
+import { cn } from "@/lib/utils";
+import { useAuth } from "@/components/AuthProvider";
 import { useLocale, useTheme } from "@/components/Providers";
-import { ACCENTS, THEME_MODES, ThemeMode } from "@/lib/theme";
+import { Page, PageHeader } from "@/components/app-shell/Page";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Segmented } from "@/components/ui/segmented";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Hint } from "@/components/ui/tooltip";
 
-/**
- * Operator view: which engines are healthy, and why the unhealthy ones are not.
- * Each unavailable engine shows the health probe's own explanation, so a missing
- * `ollama pull` is self-diagnosing.
- */
+const TIER: Record<Engine["tier"], StringKey> = {
+  native: "tierNative", classical: "tierClassical", neural: "tierNeural", vlm: "tierVlm",
+};
+
+const CHECKS: Record<string, StringKey> = {
+  database: "checkDatabase",
+  redis: "checkRedis",
+  ollama: "checkOllama",
+  ocr_engines: "checkOcrEngines",
+};
+
 export default function SettingsPage() {
-  const { locale, setLocale, t } = useLocale();
+  const { t } = useLocale();
+  return (
+    <Page className="max-w-4xl">
+      <PageHeader title={t("settings")} description={t("settingsSubtitle")} />
+      <div className="space-y-6">
+        <AppearanceCard />
+        <PasswordCard />
+        <SystemCard />
+        <EnginesCard />
+      </div>
+    </Page>
+  );
+}
+
+function Row({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="flex flex-col gap-2 py-4 first:pt-0 last:pb-0 sm:flex-row sm:items-center sm:justify-between">
+      <span className="text-sm font-medium">{label}</span>
+      <div>{children}</div>
+    </div>
+  );
+}
+
+function AppearanceCard() {
+  const { t, locale, setLocale } = useLocale();
   const { mode, accent, setMode, setAccent } = useTheme();
-  const { data: engineData, refetch } = useQuery({
-    queryKey: ["engines", "settings"],
-    queryFn: () => listEngines(true),
-  });
-  const { data: health } = useQuery({
-    queryKey: ["health"],
-    queryFn: () => api<any>("/api/health/deep/").catch((e) => e.body ?? null),
-    refetchInterval: 15000,
-  });
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base">{t("appearance")}</CardTitle>
+        <CardDescription>{t("appearanceHint")}</CardDescription>
+      </CardHeader>
+      <CardContent className="divide-y">
+        <Row label={t("theme")}>
+          <Segmented<ThemeMode>
+            value={mode}
+            onChange={setMode}
+            aria-label={t("theme")}
+            options={[
+              { value: "system", label: t("themeSystem"), icon: <Monitor /> },
+              { value: "light", label: t("themeLight"), icon: <Sun /> },
+              { value: "dark", label: t("themeDark"), icon: <Moon /> },
+            ]}
+          />
+        </Row>
+        <Row label={t("accentColor")}>
+          <div className="flex flex-wrap gap-2" role="radiogroup" aria-label={t("accentColor")}>
+            {ACCENTS.map((option) => {
+              const active = accent === option.name;
+              const label = locale === "ar" ? option.label_ar : option.label_en;
+              return (
+                <Hint key={option.name} label={label}>
+                  <button
+                    type="button"
+                    role="radio"
+                    aria-checked={active}
+                    aria-label={label}
+                    onClick={() => setAccent(option.name)}
+                    className={cn(
+                      "grid size-8 place-items-center rounded-full ring-offset-2 ring-offset-background transition-shadow focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                      active && "ring-2 ring-foreground/60",
+                    )}
+                    style={{ background: option.swatch }}
+                  >
+                    {active && <Check className="size-4 text-white" strokeWidth={3} />}
+                  </button>
+                </Hint>
+              );
+            })}
+          </div>
+        </Row>
+        <Row label={t("language")}>
+          <Segmented<"en" | "ar">
+            value={locale}
+            onChange={setLocale}
+            aria-label={t("language")}
+            options={[
+              { value: "en", label: "English" },
+              { value: "ar", label: "العربية" },
+            ]}
+          />
+        </Row>
+      </CardContent>
+    </Card>
+  );
+}
+
+function PasswordCard() {
+  const { t } = useLocale();
+  const { user } = useAuth();
+  const [current, setCurrent] = useState("");
+  const [next, setNext] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [saving, setSaving] = useState(false);
+  const mismatch = confirm.length > 0 && next !== confirm;
+
+  async function submit(event: React.FormEvent) {
+    event.preventDefault();
+    if (next !== confirm) return;
+    setSaving(true);
+    try {
+      await changePassword(current, next);
+      setCurrent(""); setNext(""); setConfirm("");
+      toast.success(t("passwordChanged"));
+    } catch (error) {
+      // The backend's validator messages (too short, too common…) are shown as-is.
+      toast.error(t("actionFailed"), { description: error instanceof ApiError ? error.detail : String(error) });
+    } finally {
+      setSaving(false);
+    }
+  }
 
   return (
-    <div className="space-y-5">
-      <div className="flex items-center">
-        <h1 className="text-xl font-semibold">{t("settings")}</h1>
-        <button
-          onClick={() => refetch()}
-          className="ms-auto rounded-md border px-3 py-1.5 text-sm"
-          style={{ borderColor: "var(--border)" }}
-        >
-          Re-probe
-        </button>
-      </div>
-
-      <section className="card space-y-5 p-4">
-        <h2 className="font-medium">{t("appearance")}</h2>
-
-        {/* Theme mode */}
-        <div>
-          <p className="mb-2 text-sm" style={{ color: "var(--muted)" }}>{t("theme")}</p>
-          <div className="inline-flex rounded-lg border p-0.5"
-               style={{ borderColor: "var(--border)" }}>
-            {THEME_MODES.map((m) => {
-              const active = mode === m;
-              const label: Record<ThemeMode, string> = {
-                system: t("themeSystem"), light: t("themeLight"), dark: t("themeDark"),
-              };
-              return (
-                <button
-                  key={m}
-                  onClick={() => setMode(m)}
-                  aria-pressed={active}
-                  className="rounded-md px-3 py-1.5 text-sm transition-colors"
-                  style={
-                    active
-                      ? { background: "var(--accent)", color: "#fff" }
-                      : { color: "var(--muted)" }
-                  }
-                >
-                  {label[m]}
-                </button>
-              );
-            })}
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base">{t("account")}</CardTitle>
+        <CardDescription>
+          {t("signedInAs")} <span className="font-medium text-foreground" dir="ltr">{user?.username}</span>
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        <form onSubmit={submit} className="grid max-w-md gap-4">
+          {/* Lets password managers attach the new password to the right account. */}
+          <input type="text" autoComplete="username" value={user?.username ?? ""} hidden readOnly />
+          <div className="space-y-2">
+            <Label htmlFor="current-password">{t("currentPassword")}</Label>
+            <Input id="current-password" type="password" autoComplete="current-password" dir="ltr"
+                   required value={current} onChange={(event) => setCurrent(event.target.value)} />
           </div>
-        </div>
-
-        {/* Accent colour */}
-        <div>
-          <p className="mb-2 text-sm" style={{ color: "var(--muted)" }}>{t("accentColor")}</p>
-          <div className="flex flex-wrap gap-2">
-            {ACCENTS.map((a) => {
-              const active = accent === a.name;
-              const label = locale === "ar" ? a.label_ar : a.label_en;
-              return (
-                <button
-                  key={a.name}
-                  onClick={() => setAccent(a.name)}
-                  aria-pressed={active}
-                  aria-label={label}
-                  title={label}
-                  className="flex items-center gap-2 rounded-lg border px-2.5 py-1.5 text-sm"
-                  style={{
-                    borderColor: active ? "var(--accent)" : "var(--border)",
-                    background: active ? "var(--hover)" : undefined,
-                  }}
-                >
-                  <span
-                    className="inline-block h-4 w-4 rounded-full"
-                    style={{ background: a.swatch }}
-                    aria-hidden
-                  />
-                  {label}
-                </button>
-              );
-            })}
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="space-y-2">
+              <Label htmlFor="new-password">{t("newPassword")}</Label>
+              <Input id="new-password" type="password" autoComplete="new-password" dir="ltr"
+                     required value={next} onChange={(event) => setNext(event.target.value)} />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="confirm-password">{t("confirmPassword")}</Label>
+              <Input id="confirm-password" type="password" autoComplete="new-password" dir="ltr"
+                     required value={confirm} aria-invalid={mismatch}
+                     className={cn(mismatch && "border-destructive focus-visible:ring-destructive/30")}
+                     onChange={(event) => setConfirm(event.target.value)} />
+            </div>
           </div>
-        </div>
-
-        {/* Language — was only reachable from the header toggle. */}
-        <div>
-          <p className="mb-2 text-sm" style={{ color: "var(--muted)" }}>{t("language")}</p>
-          <div className="inline-flex rounded-lg border p-0.5"
-               style={{ borderColor: "var(--border)" }}>
-            {(["ar", "en"] as const).map((l) => {
-              const active = locale === l;
-              return (
-                <button
-                  key={l}
-                  onClick={() => setLocale(l)}
-                  aria-pressed={active}
-                  className="rounded-md px-3 py-1.5 text-sm transition-colors"
-                  style={
-                    active
-                      ? { background: "var(--accent)", color: "#fff" }
-                      : { color: "var(--muted)" }
-                  }
-                >
-                  {l === "ar" ? "العربية" : "English"}
-                </button>
-              );
-            })}
+          {mismatch && <p className="text-xs text-destructive">{t("passwordsDontMatch")}</p>}
+          <div>
+            <Button type="submit" disabled={saving || !current || !next || !confirm || mismatch}>
+              {saving && <Loader2 className="animate-spin" />}
+              {t("changePassword")}
+            </Button>
           </div>
-        </div>
-      </section>
+        </form>
+      </CardContent>
+    </Card>
+  );
+}
 
-      {health && (
-        <section className="card p-4">
-          <h2 className="mb-2 font-medium">System</h2>
-          <ul className="space-y-1 text-sm">
-            {Object.entries(health.checks ?? {}).map(([name, check]: [string, any]) => (
-              <li key={name} className="flex items-start gap-2">
-                <span style={{ color: check.ok ? "#22c55e" : "#ef4444" }}>
-                  {check.ok ? "●" : "○"}
-                </span>
-                <span className="font-medium">{name}</span>
-                <span className="ms-auto text-xs" style={{ color: "var(--muted)" }}>
-                  {check.detail || check.base_url || (check.available ?? []).join(", ")}
-                </span>
+function SystemCard() {
+  const { t } = useLocale();
+  const { data: health, isFetching, refetch } = useQuery({
+    queryKey: ["health"],
+    // A degraded system answers 503 with the same body; show it, don't throw.
+    queryFn: () => api<any>("/api/health/deep/").catch((error) => error.body ?? null), // eslint-disable-line @typescript-eslint/no-explicit-any
+    refetchInterval: 30_000,
+  });
+  const checks = Object.entries((health?.checks ?? {}) as Record<string, { ok: boolean; detail?: string }>);
+  const allOk = health?.status === "ok";
+
+  return (
+    <Card>
+      <CardHeader className="flex-row flex-wrap items-start gap-3 space-y-0">
+        <div className="min-w-0 flex-1 basis-60">
+          <CardTitle className="text-base">{t("systemStatus")}</CardTitle>
+          <CardDescription className="mt-1.5">{t("systemStatusHint")}</CardDescription>
+        </div>
+        <Button variant="outline" size="sm" onClick={() => refetch()} disabled={isFetching}>
+          <RefreshCw className={cn(isFetching && "animate-spin")} /> {t("recheck")}
+        </Button>
+      </CardHeader>
+      <CardContent>
+        {!health ? (
+          <div className="space-y-2">{[0, 1, 2, 3].map((i) => <Skeleton key={i} className="h-10" />)}</div>
+        ) : (
+          <>
+            <div className={cn(
+              "mb-3 flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium",
+              allOk ? "bg-success/10 text-success" : "bg-warning/10 text-warning",
+            )}>
+              {allOk ? <CheckCircle2 className="size-4" /> : <XCircle className="size-4" />}
+              {allOk ? t("allOperational") : t("someDegraded")}
+            </div>
+            <ul className="divide-y rounded-lg border">
+              {checks.map(([name, check]) => (
+                <li key={name} className="flex items-center gap-3 px-3 py-2.5">
+                  <span className={cn("size-2 shrink-0 rounded-full", check.ok ? "bg-success" : "bg-destructive")} />
+                  <span className="text-sm">{CHECKS[name] ? t(CHECKS[name]) : name}</span>
+                  {check.detail && (
+                    <span className="min-w-0 flex-1 truncate text-end text-xs text-muted-foreground" title={check.detail}>
+                      {check.detail}
+                    </span>
+                  )}
+                  <Badge variant={check.ok ? "success" : "destructive"} className={cn(!check.detail && "ms-auto")}>
+                    {check.ok ? t("operational") : t("degraded")}
+                  </Badge>
+                </li>
+              ))}
+            </ul>
+          </>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function EnginesCard() {
+  const { t, locale } = useLocale();
+  const { data, isPending } = useQuery({ queryKey: ["engines"], queryFn: () => listEngines() });
+  const engines = [...(data?.engines ?? [])].sort((a, b) => Number(b.available) - Number(a.available));
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base">{t("ocrEngines")}</CardTitle>
+        <CardDescription>{t("ocrEnginesHint")}</CardDescription>
+      </CardHeader>
+      <CardContent>
+        {isPending ? (
+          <div className="space-y-2">{[0, 1, 2, 3].map((i) => <Skeleton key={i} className="h-14" />)}</div>
+        ) : (
+          <ul className="divide-y rounded-lg border">
+            {engines.map((engine) => (
+              <li key={engine.name} className="flex flex-col gap-2 px-3 py-3 sm:flex-row sm:items-center sm:gap-4">
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className={cn("text-sm font-medium", !engine.available && "text-muted-foreground")}>
+                      {locale === "ar" ? engine.display_name_ar : engine.display_name_en}
+                    </span>
+                    <span className="rounded bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground">{t(TIER[engine.tier])}</span>
+                  </div>
+                  {engine.available ? (
+                    <p className="mt-0.5 line-clamp-1 text-xs text-muted-foreground">
+                      {locale === "ar" ? engine.description_ar : engine.description_en}
+                    </p>
+                  ) : (
+                    <FixCommand detail={engine.detail} />
+                  )}
+                </div>
+                <div className="flex items-center gap-3 sm:justify-end">
+                  <span className="tabular-nums text-xs text-muted-foreground">
+                    {fmt(t("perPage"), { n: num(engine.est_seconds_per_page) })}
+                  </span>
+                  <Badge variant={engine.available ? "success" : "secondary"}>
+                    {engine.available ? t("available") : t("unavailable")}
+                  </Badge>
+                </div>
               </li>
             ))}
           </ul>
-        </section>
-      )}
+        )}
+      </CardContent>
+    </Card>
+  );
+}
 
-      <section className="card p-4">
-        <h2 className="mb-3 font-medium">OCR engines</h2>
-        <ul className="space-y-2">
-          {(engineData?.engines ?? []).map((e) => (
-            <li key={e.name} className="flex items-start gap-3 border-b pb-2 last:border-0"
-                style={{ borderColor: "var(--border)" }}>
-              <span style={{ color: e.available ? "#22c55e" : "var(--muted)" }}>
-                {e.available ? "●" : "○"}
-              </span>
-              <div className="min-w-0 flex-1">
-                <div className="text-sm font-medium">
-                  {locale === "ar" ? e.display_name_ar : e.display_name_en}
-                  <span className="ms-2 text-xs" style={{ color: "var(--muted)" }}>
-                    {e.tier}
-                  </span>
-                </div>
-                <p className="text-xs" style={{ color: "var(--muted)" }}>
-                  {e.available
-                    ? (locale === "ar" ? e.description_ar : e.description_en)
-                    : e.detail}
-                </p>
-              </div>
-              <span className="numeric text-xs" style={{ color: "var(--muted)" }}>
-                ~{num(e.est_seconds_per_page)}s/pg
-              </span>
-            </li>
-          ))}
-        </ul>
-      </section>
+/** Probe detail, with the fix command (after "run:") copyable on its own. */
+function FixCommand({ detail }: { detail: string }) {
+  const { t } = useLocale();
+  const [copied, setCopied] = useState(false);
+  const command = detail.match(/run:\s*(.+)$/)?.[1]?.trim();
+  return (
+    <div className="mt-1 flex min-w-0 items-center gap-1.5">
+      <code className="min-w-0 truncate rounded bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground" dir="ltr" title={detail}>
+        {command ?? detail}
+      </code>
+      {command && (
+        <Hint label={copied ? t("copied") : t("copyCommand")}>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            className="size-6"
+            aria-label={t("copyCommand")}
+            onClick={async () => {
+              try {
+                await navigator.clipboard.writeText(command);
+                setCopied(true);
+                setTimeout(() => setCopied(false), 1500);
+              } catch {}
+            }}
+          >
+            {copied ? <Check className="text-success" /> : <Copy />}
+          </Button>
+        </Hint>
+      )}
     </div>
   );
 }

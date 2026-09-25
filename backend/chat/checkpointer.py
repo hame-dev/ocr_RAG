@@ -46,6 +46,10 @@ async def open_pool():
         min_size=1,
         open=False,
         kwargs={"autocommit": True, "prepare_threshold": 0},
+        # Validate on checkout: after a Postgres restart the pool otherwise
+        # hands a dead connection to the next chat turn, which then fails with
+        # "terminating connection due to administrator command".
+        check=AsyncConnectionPool.check_connection,
     )
     await _pool.open()
     _checkpointer = AsyncPostgresSaver(_pool)

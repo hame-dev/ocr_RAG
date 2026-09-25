@@ -8,7 +8,7 @@ from rest_framework import status, viewsets
 from rest_framework.decorators import action, api_view
 from rest_framework.response import Response
 
-from documents.models import Document
+from common.ownership import get_owned_document
 from ocr.engines import registry
 from ocr.models import OCRBatch, OCRPageResult, OCRRun
 from ocr.serializers import (
@@ -35,6 +35,9 @@ def engine_catalog(request):
 class OCRBatchViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = OCRBatch.objects.prefetch_related("runs").all()
     serializer_class = OCRBatchSerializer
+
+    def get_queryset(self):
+        return super().get_queryset().filter(document__owner=self.request.user)
 
     @action(detail=True, methods=["post"])
     def cancel(self, request, pk=None):
@@ -130,6 +133,9 @@ class OCRRunViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = OCRRun.objects.prefetch_related("page_results").all()
     serializer_class = OCRRunDetailSerializer
 
+    def get_queryset(self):
+        return super().get_queryset().filter(document__owner=self.request.user)
+
     @action(detail=True, methods=["get"], url_path=r"pages/(?P<page_no>\d+)")
     def page(self, request, pk=None, page_no=None):
         run = self.get_object()
@@ -150,9 +156,7 @@ class OCRRunViewSet(viewsets.ReadOnlyModelViewSet):
 @api_view(["POST"])
 def start_ocr(request, document_id):
     """Kick off a multi-engine OCR batch."""
-    document = Document.objects.filter(id=document_id).first()
-    if not document:
-        raise Http404("no such document")
+    document = get_owned_document(request.user, document_id)
 
     serializer = StartOCRSerializer(data=request.data)
     serializer.is_valid(raise_exception=True)

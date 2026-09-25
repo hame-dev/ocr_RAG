@@ -25,6 +25,9 @@ urlpatterns = [
     path("api/documents/<uuid:document_id>/events/", doc_sse.document_events),
     path("api/conversations/<uuid:conversation_id>/stream/", chat_sse.chat_stream),
 
+    # --- Auth. Session cookie + CSRF; accounts are operator-created. -------
+    path("api/auth/", include("accounts.urls")),
+
     path("api/", include(router.urls)),
 
     # --- OCR ----------------------------------------------------------------

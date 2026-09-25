@@ -51,6 +51,19 @@ put [[cite:...]] markers inside the Mermaid block. Do not add a diagram when pro
 small table would communicate the answer more clearly.
 {scope_note}"""
 
+GENERAL_SYSTEM_PROMPT = """You are a helpful, knowledgeable assistant.
+
+How to answer:
+- Answer in the SAME LANGUAGE the user wrote in. If they ask in Arabic, answer in Arabic.
+- Answer from your general knowledge. Be accurate and concise, and say so when you are \
+unsure rather than guessing.
+- In this mode you have NO access to the user's document library. If the user asks about \
+their own documents or files, say that you cannot see them here and suggest switching to \
+Documents mode.
+- Never write citation markers such as [[cite:...]].
+- When the user asks for a graph, diagram, flow, timeline or relationship map, you may include
+a valid fenced ```mermaid diagram with concise labels, no HTML and no external links."""
+
 SCOPE_ALL = "\nYou are searching the user's entire document library."
 SCOPE_SELECTED = (
     "\nYou are scoped to {count} specific document(s): {titles}. Every document "
@@ -66,6 +79,7 @@ class AgentState(TypedDict):
     doc_ids: list[str] | None
     scope_note: str
     research_mode: str
+    chat_mode: str
     tool_rounds: int
     retrieved: dict
     summary: str
@@ -125,6 +139,9 @@ async def prepare(state: AgentState) -> dict:
 
 
 async def agent(state: AgentState) -> dict:
+    if state.get("chat_mode") == "general":
+        return await _general_answer(state)
+
     system = SYSTEM_PROMPT.format(scope_note=state.get("scope_note", SCOPE_ALL))
     profile = research_profile(state.get("research_mode", DEFAULT_RESEARCH_MODE))
     system += f"\n\n{profile['instruction']}"
@@ -133,6 +150,17 @@ async def agent(state: AgentState) -> dict:
 
     messages = [SystemMessage(content=system)] + list(state["messages"])
     response = await _llm().ainvoke(messages)
+    return {"messages": [response]}
+
+
+async def _general_answer(state: AgentState) -> dict:
+    """Plain LLM turn: no tools are bound, so _route always ends the turn."""
+    system = GENERAL_SYSTEM_PROMPT
+    if summary := state.get("summary"):
+        system += f"\n\nEarlier in this conversation:\n{summary}"
+
+    messages = [SystemMessage(content=system)] + list(state["messages"])
+    response = await _llm(with_tools=False).ainvoke(messages)
     return {"messages": [response]}
 
 

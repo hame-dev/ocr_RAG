@@ -3,21 +3,29 @@
 `/api/health/` is the container liveness probe and must stay trivially fast.
 `/api/health/deep/` is the operator view: it tells you which dependency is
 actually broken, including per-engine status.
+
+Both are public: container healthchecks and the smoke script call them without
+a session.
 """
 from __future__ import annotations
 
 from django.conf import settings
 from django.db import connection
-from rest_framework.decorators import api_view
+from rest_framework.decorators import api_view, authentication_classes, permission_classes
+from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 
 
 @api_view(["GET"])
+@authentication_classes([])
+@permission_classes([AllowAny])
 def liveness(request):
     return Response({"status": "ok"})
 
 
 @api_view(["GET"])
+@authentication_classes([])
+@permission_classes([AllowAny])
 def readiness(request):
     checks: dict[str, dict] = {}
     ok = True

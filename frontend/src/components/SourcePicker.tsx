@@ -1,8 +1,14 @@
 "use client";
 
-import { useDeferredValue, useEffect, useRef, useState } from "react";
+import { useDeferredValue, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { Check, FileText, Library, Loader2, Paperclip, Search } from "lucide-react";
 import { api, DocumentSummary, SelectedDocument } from "@/lib/api";
+import { fmt } from "@/lib/i18n";
+import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useLocale } from "./Providers";
 
 interface SourcePickerProps {
@@ -11,163 +17,116 @@ interface SourcePickerProps {
   onChange: (documents: SelectedDocument[]) => Promise<void> | void;
 }
 
+/** Scope a conversation to specific documents (or the whole library). */
 export function SourcePicker({ selected, disabled, onChange }: SourcePickerProps) {
   const { t } = useLocale();
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
-  const deferredQuery = useDeferredValue(query.trim());
-  const rootRef = useRef<HTMLDivElement>(null);
+  const search = useDeferredValue(query.trim());
 
-  const { data, isLoading } = useQuery({
-    queryKey: ["chat-source-documents", deferredQuery],
+  const { data, isPending } = useQuery({
+    queryKey: ["chat-source-documents", search],
     queryFn: () =>
       api<{ results: DocumentSummary[] }>(
-        `/api/documents/?status=ready&limit=50${
-          deferredQuery ? `&q=${encodeURIComponent(deferredQuery)}` : ""
-        }`,
+        `/api/documents/?status__in=ready,indexed&limit=50${search ? `&q=${encodeURIComponent(search)}` : ""}`,
       ),
     enabled: open,
   });
 
-  useEffect(() => {
-    if (!open) return;
-    function closeOnOutsideClick(event: MouseEvent) {
-      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
-    }
-    function closeOnEscape(event: KeyboardEvent) {
-      if (event.key === "Escape") setOpen(false);
-    }
-    document.addEventListener("mousedown", closeOnOutsideClick);
-    document.addEventListener("keydown", closeOnEscape);
-    return () => {
-      document.removeEventListener("mousedown", closeOnOutsideClick);
-      document.removeEventListener("keydown", closeOnEscape);
-    };
-  }, [open]);
-
   const selectedIds = new Set(selected.map((document) => document.id));
   const documents = data?.results ?? [];
 
-  async function toggle(document: DocumentSummary) {
+  function toggle(document: DocumentSummary) {
     const compact: SelectedDocument = {
       id: document.id,
       display_title: document.display_title,
       original_filename: document.original_filename,
     };
-    const next = selectedIds.has(document.id)
-      ? selected.filter((item) => item.id !== document.id)
-      : [...selected, compact];
-    await onChange(next);
+    void onChange(
+      selectedIds.has(document.id)
+        ? selected.filter((item) => item.id !== document.id)
+        : [...selected, compact],
+    );
   }
 
   return (
-    <div ref={rootRef} className="relative">
-      <button
-        type="button"
-        onClick={() => setOpen((value) => !value)}
-        disabled={disabled}
-        aria-expanded={open}
-        aria-haspopup="dialog"
-        className="composer-control"
-      >
-        <span aria-hidden>＋</span>
-        <span>
-          {selected.length
-            ? t("selectedSourceCount").replace("{count}", String(selected.length))
-            : t("sources")}
-        </span>
-      </button>
-
-      {open && (
-        <div
-          role="dialog"
-          aria-label={t("selectSources")}
-          className="absolute bottom-full start-0 z-30 mb-2 flex max-h-[26rem] w-[min(24rem,calc(100vw-2rem))] flex-col overflow-hidden rounded-2xl border shadow-2xl"
-          style={{ background: "var(--card)", borderColor: "var(--border)" }}
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button
+          variant="ghost"
+          size="sm"
+          disabled={disabled}
+          className={cn("h-8 gap-1.5 text-muted-foreground", selected.length && "text-foreground")}
         >
-          <div className="border-b p-3" style={{ borderColor: "var(--border)" }}>
-            <div className="flex items-center gap-2">
-              <div>
-                <p className="text-sm font-semibold">{t("selectSources")}</p>
-                <p className="text-xs" style={{ color: "var(--muted)" }}>
-                  {t("sourcePickerHint")}
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => setOpen(false)}
-                className="ms-auto grid h-8 w-8 place-items-center rounded-lg hover:bg-[var(--hover)]"
-                aria-label={t("close")}
-              >
-                ×
-              </button>
-            </div>
-            <input
+          <Paperclip />
+          {selected.length ? fmt(t("selectedSourceCount"), { count: selected.length }) : t("sources")}
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent side="top" className="w-[min(24rem,calc(100vw-2rem))] p-0">
+        <div className="border-b p-3">
+          <p className="text-sm font-semibold">{t("selectSources")}</p>
+          <p className="text-xs text-muted-foreground">{t("sourcePickerHint")}</p>
+          <div className="relative mt-3">
+            <Search className="pointer-events-none absolute start-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+            <Input
               autoFocus
               value={query}
               onChange={(event) => setQuery(event.target.value)}
               placeholder={t("searchSources")}
-              className="mt-3 w-full rounded-xl border px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-[var(--accent)]/30"
-              style={{ background: "var(--bg)", borderColor: "var(--border)", color: "var(--fg)" }}
+              className="h-8 ps-8"
+              dir="auto"
             />
           </div>
-
-          {selected.length > 0 && (
-            <button
-              type="button"
-              onClick={() => void onChange([])}
-              className="mx-3 mt-3 rounded-xl border px-3 py-2 text-start text-sm hover:bg-[var(--hover)]"
-              style={{ borderColor: "var(--border)" }}
-            >
-              <span className="font-medium">{t("wholeLibrary")}</span>
-              <span className="ms-2 text-xs" style={{ color: "var(--muted)" }}>
-                {t("clearSourceFilter")}
-              </span>
-            </button>
-          )}
-
-          <div className="min-h-0 flex-1 overflow-y-auto p-3">
-            {isLoading ? (
-              <p className="py-6 text-center text-sm" style={{ color: "var(--muted)" }}>
-                {t("loading")}
-              </p>
-            ) : documents.length === 0 ? (
-              <p className="py-6 text-center text-sm" style={{ color: "var(--muted)" }}>
-                {t("noMatchingSources")}
-              </p>
-            ) : (
-              <ul className="space-y-1">
-                {documents.map((document) => {
-                  const checked = selectedIds.has(document.id);
-                  return (
-                    <li key={document.id}>
-                      <label className="flex cursor-pointer items-start gap-3 rounded-xl px-2.5 py-2 hover:bg-[var(--hover)]">
-                        <input
-                          type="checkbox"
-                          checked={checked}
-                          onChange={() => void toggle(document)}
-                          className="mt-1 h-4 w-4 accent-[var(--accent)]"
-                        />
-                        <span className="min-w-0">
-                          <span className="doc-text block truncate text-sm font-medium" dir="auto">
-                            {document.display_title}
-                          </span>
-                          {document.display_title !== document.original_filename && (
-                            <span className="doc-text block truncate text-xs" dir="auto"
-                                  style={{ color: "var(--muted)" }}>
-                              {document.original_filename}
-                            </span>
-                          )}
-                        </span>
-                      </label>
-                    </li>
-                  );
-                })}
-              </ul>
-            )}
-          </div>
         </div>
-      )}
-    </div>
+
+        <div className="scrollbar-thin max-h-72 overflow-y-auto p-1.5">
+          <button
+            type="button"
+            onClick={() => void onChange([])}
+            className="flex w-full items-center gap-2.5 rounded-md px-2 py-2 text-start text-sm hover:bg-accent"
+          >
+            <Library className="size-4 text-muted-foreground" />
+            <span className="flex-1">{t("wholeLibrary")}</span>
+            {!selected.length && <Check className="size-4 text-primary" />}
+          </button>
+          <div className="my-1 h-px bg-border" />
+          {isPending ? (
+            <div className="flex justify-center py-6"><Loader2 className="size-4 animate-spin text-muted-foreground" /></div>
+          ) : documents.length === 0 ? (
+            <p className="py-6 text-center text-sm text-muted-foreground">{t("noMatchingSources")}</p>
+          ) : (
+            documents.map((document) => {
+              const checked = selectedIds.has(document.id);
+              return (
+                <button
+                  key={document.id}
+                  type="button"
+                  role="menuitemcheckbox"
+                  aria-checked={checked}
+                  onClick={() => toggle(document)}
+                  className="flex w-full items-center gap-2.5 rounded-md px-2 py-2 text-start hover:bg-accent"
+                >
+                  <FileText className="size-4 shrink-0 text-muted-foreground" />
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-sm" dir="auto">{document.display_title}</span>
+                    {document.display_title !== document.original_filename && (
+                      <span className="block truncate text-xs text-muted-foreground" dir="auto">
+                        {document.original_filename}
+                      </span>
+                    )}
+                  </span>
+                  <span className={cn(
+                    "grid size-4 shrink-0 place-items-center rounded border",
+                    checked ? "border-primary bg-primary text-primary-foreground" : "border-input",
+                  )}>
+                    {checked && <Check className="size-3" strokeWidth={3} />}
+                  </span>
+                </button>
+              );
+            })
+          )}
+        </div>
+      </PopoverContent>
+    </Popover>
   );
 }

@@ -62,12 +62,12 @@ export function MermaidDiagram({ source }: { source: string }) {
 
   return (
     <figure className="mermaid-diagram" aria-label={t("diagram")}>
-      <div className="mb-2 flex items-center gap-2 text-xs" style={{ color: "var(--muted)" }}>
+      <div className="mb-2 flex items-center gap-2 text-xs text-muted-foreground">
         <span>{t("diagram")}</span>
         <button
           type="button"
           onClick={() => setShowSource((value) => !value)}
-          className="ms-auto rounded-lg px-2 py-1 hover:bg-[var(--hover)]"
+          className="ms-auto rounded-lg px-2 py-1 hover:bg-accent"
         >
           {showSource ? t("hideDiagramSource") : t("showDiagramSource")}
         </button>
@@ -81,13 +81,13 @@ export function MermaidDiagram({ source }: { source: string }) {
         <div className="overflow-x-auto" dangerouslySetInnerHTML={{ __html: svg }} />
       ) : error ? (
         <div>
-          <p className="text-xs" style={{ color: "var(--muted)" }}>
+          <p className="text-xs text-muted-foreground">
             {t("diagramUnavailable")}
           </p>
           <pre><code>{source}</code></pre>
         </div>
       ) : (
-        <div className="flex items-center gap-2 py-5 text-xs" style={{ color: "var(--muted)" }}>
+        <div className="flex items-center gap-2 py-5 text-xs text-muted-foreground">
           <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-current border-t-transparent" />
           {t("renderingDiagram")}
         </div>

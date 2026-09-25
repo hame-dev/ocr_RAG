@@ -1,4 +1,4 @@
-.PHONY: help up down build logs migrate warmup smoke test shell psql clean ps
+.PHONY: help up down build logs migrate warmup smoke test createuser claim shell psql clean ps
 
 COMPOSE := docker compose
 
@@ -38,6 +38,14 @@ test:   ## Run the backend test suite
 
 fixtures: ## Generate the bilingual test PDFs
 	$(COMPOSE) run --rm backend python tests/fixtures/make_test_pdf.py
+
+createuser: ## Create a login (make createuser U=alice, add STAFF=1 for staff)
+	@test -n "$(U)" || (echo "usage: make createuser U=<username> [STAFF=1]" && exit 1)
+	$(COMPOSE) run --rm backend python manage.py create_user $(U) $(if $(STAFF),--staff,)
+
+claim:  ## Give pre-login documents and chats to a user (make claim U=alice)
+	@test -n "$(U)" || (echo "usage: make claim U=<username>" && exit 1)
+	$(COMPOSE) run --rm backend python manage.py claim_unowned $(U)
 
 shell:  ## Django shell
 	$(COMPOSE) run --rm backend python manage.py shell

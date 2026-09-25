@@ -1,0 +1,6 @@
+# Host installs contain platform-specific binaries (e.g. macOS SWC) that break
+# the Linux image; the image runs its own `npm ci`.
+node_modules
+.next
+npm-debug.log*
+.env*

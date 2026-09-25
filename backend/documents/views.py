@@ -46,8 +46,10 @@ class DocumentViewSet(viewsets.ModelViewSet):
         return DocumentDetailSerializer
 
     def get_queryset(self):
-        qs = super().get_queryset()
+        qs = super().get_queryset().filter(owner=self.request.user)
         params = self.request.query_params
+        if statuses := params.get("status__in"):
+            qs = qs.filter(status__in=[s for s in statuses.split(",") if s])
         if q := params.get("q"):
             qs = qs.filter(title__icontains=q) | qs.filter(original_filename__icontains=q)
         if doc_type := params.get("doc_type"):
@@ -62,6 +64,7 @@ class DocumentViewSet(viewsets.ModelViewSet):
         upload = serializer.validated_data["file"]
 
         document = Document.objects.create(
+            owner=request.user,
             title=serializer.validated_data.get("title", ""),
             original_filename=upload.name,
             mime_type=(

@@ -7,10 +7,10 @@ def test_chandra_ollama_is_the_default_ocr_engine():
     assert settings.DEFAULT_OCR_ENGINE == "chandra_ollama"
 
 
-def test_engine_catalog_exposes_the_default(monkeypatch, client):
+def test_engine_catalog_exposes_the_default(monkeypatch, auth_client):
     monkeypatch.setattr("ocr.engines.registry.probe_all", lambda force=False: [])
 
-    response = client.get("/api/ocr/engines/")
+    response = auth_client.get("/api/ocr/engines/")
 
     assert response.status_code == 200
     assert response.json() == {"engines": [], "default_engine": "chandra_ollama"}

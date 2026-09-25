@@ -7,14 +7,12 @@ from rest_framework.response import Response
 
 from correction.guards import apply_changes
 from correction.models import AICorrectionJob
-from documents.models import Document
+from common.ownership import get_owned_document
 
 
 @api_view(["POST"])
 def start_correction(request, document_id):
-    document = Document.objects.filter(id=document_id).first()
-    if not document:
-        raise Http404("no such document")
+    document = get_owned_document(request.user, document_id)
     if not document.current_revision:
         return Response(
             {"detail": "select or enter document text first"},
@@ -38,7 +36,7 @@ def start_correction(request, document_id):
 
 @api_view(["GET"])
 def correction_job(request, job_id):
-    job = AICorrectionJob.objects.filter(id=job_id).first()
+    job = AICorrectionJob.objects.filter(id=job_id, document__owner=request.user).first()
     if not job:
         raise Http404("no such correction job")
     return Response(
@@ -62,7 +60,7 @@ def correction_job(request, job_id):
 def apply_correction(request, job_id):
     """Apply the changes the USER accepted, producing a new revision."""
     job = AICorrectionJob.objects.select_related("document", "base_revision").filter(
-        id=job_id
+        id=job_id, document__owner=request.user
     ).first()
     if not job:
         raise Http404("no such correction job")

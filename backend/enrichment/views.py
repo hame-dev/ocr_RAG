@@ -5,17 +5,14 @@ from rest_framework import status
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
-from documents.models import Document
+from common.ownership import get_owned_document
 from enrichment import extractor
 from enrichment.models import ExtractionPlan, MetadataRecord
 from enrichment.schemas import JSON_TYPE_MAP, build_extraction_schema, core_schema
 
 
-def _document(document_id):
-    document = Document.objects.filter(id=document_id).first()
-    if not document:
-        raise Http404("no such document")
-    return document
+def _document(request, document_id):
+    return get_owned_document(request.user, document_id)
 
 
 @api_view(["GET"])
@@ -34,7 +31,7 @@ def metadata_schema(request):
 @api_view(["GET", "POST", "PATCH"])
 def extraction_plan(request, document_id):
     """GET the proposal, POST to (re)generate it, PATCH to accept a subset."""
-    document = _document(document_id)
+    document = _document(request, document_id)
 
     if request.method == "POST":
         from enrichment.tasks import plan_extraction
@@ -77,7 +74,7 @@ def extraction_plan(request, document_id):
 
 @api_view(["POST"])
 def enrich(request, document_id):
-    document = _document(document_id)
+    document = _document(request, document_id)
 
     if not document.current_revision:
         return Response(
@@ -101,7 +98,7 @@ def enrich(request, document_id):
 
 @api_view(["GET", "PATCH"])
 def metadata(request, document_id):
-    document = _document(document_id)
+    document = _document(request, document_id)
     record = getattr(document, "metadata", None)
     if not record:
         raise Http404("this document has no metadata record yet")

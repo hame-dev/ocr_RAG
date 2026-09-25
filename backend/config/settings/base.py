@@ -3,15 +3,33 @@ import os
 from pathlib import Path
 
 import dj_database_url
+from django.core.exceptions import ImproperlyConfigured
 
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 
-SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY", "dev-only-not-secret")
+_DEV_SECRET_KEY = "dev-only-not-secret"
+SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY", _DEV_SECRET_KEY)
 DEBUG = os.environ.get("DJANGO_DEBUG", "1") == "1"
 ALLOWED_HOSTS = os.environ.get("DJANGO_ALLOWED_HOSTS", "*").split(",")
 
+# Sessions are signed with SECRET_KEY, so shipping the public dev key would let
+# anyone forge a login.
+if not DEBUG and SECRET_KEY.startswith(_DEV_SECRET_KEY):
+    raise ImproperlyConfigured("set DJANGO_SECRET_KEY when DJANGO_DEBUG is off")
+
+
+def _env_list(name: str, default: str) -> list[str]:
+    return [item.strip() for item in os.environ.get(name, default).split(",") if item.strip()]
+
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    return os.environ.get(name, "1" if default else "0").lower() in {"1", "true", "yes"}
+
+
 INSTALLED_APPS = [
+    "django.contrib.auth",
     "django.contrib.contenttypes",
+    "django.contrib.sessions",
     "django.contrib.staticfiles",
     "django.contrib.postgres",
     "rest_framework",
@@ -19,6 +37,7 @@ INSTALLED_APPS = [
     "drf_spectacular",
     "corsheaders",
     "common",
+    "accounts",
     "documents",
     "ocr",
     "correction",
@@ -27,10 +46,13 @@ INSTALLED_APPS = [
     "chat",
 ]
 
-# No auth app and no sessions: this system has no login by design.
 MIDDLEWARE = [
+    "django.middleware.security.SecurityMiddleware",
+    "django.contrib.sessions.middleware.SessionMiddleware",
     "corsheaders.middleware.CorsMiddleware",
     "django.middleware.common.CommonMiddleware",
+    "django.middleware.csrf.CsrfViewMiddleware",
+    "django.contrib.auth.middleware.AuthenticationMiddleware",
 ]
 
 ROOT_URLCONF = "config.urls"
@@ -59,17 +81,22 @@ TIME_ZONE = "UTC"
 USE_I18N = True
 USE_TZ = True
 
+AUTH_PASSWORD_VALIDATORS = [
+    {"NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"},
+    {"NAME": "django.contrib.auth.password_validation.MinimumLengthValidator"},
+    {"NAME": "django.contrib.auth.password_validation.CommonPasswordValidator"},
+    {"NAME": "django.contrib.auth.password_validation.NumericPasswordValidator"},
+]
+
 STATIC_URL = "/static/"
 MEDIA_ROOT = os.environ.get("MEDIA_ROOT", "/data/media")
 
 # ---- DRF --------------------------------------------------------------------
 REST_FRAMEWORK = {
-    "DEFAULT_AUTHENTICATION_CLASSES": [],
-    "DEFAULT_PERMISSION_CLASSES": ["rest_framework.permissions.AllowAny"],
-    # DRF otherwise imports django.contrib.auth.models.AnonymousUser for every
-    # request.  The auth app is deliberately absent because this deployment has
-    # no login, so represent unauthenticated callers as None instead.
-    "UNAUTHENTICATED_USER": None,
+    "DEFAULT_AUTHENTICATION_CLASSES": ["accounts.authentication.SessionAuthentication401"],
+    "DEFAULT_PERMISSION_CLASSES": ["rest_framework.permissions.IsAuthenticated"],
+    # Only the login endpoint opts into throttling; it is the brute-force target.
+    "DEFAULT_THROTTLE_RATES": {"login": os.environ.get("LOGIN_THROTTLE_RATE", "5/min")},
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
     "DEFAULT_FILTER_BACKENDS": ["django_filters.rest_framework.DjangoFilterBackend"],
     "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.LimitOffsetPagination",
@@ -81,14 +108,36 @@ SPECTACULAR_SETTINGS = {
     "DESCRIPTION": "Arabic/English OCR, correction, metadata enrichment and agentic RAG.",
     "VERSION": "1.0.0",
     "SERVE_INCLUDE_SCHEMA": False,
+    "SERVE_PERMISSIONS": ["rest_framework.permissions.IsAuthenticated"],
 }
 
-# No auth means no cookies to protect; the browser must reach Django directly
-# so that SSE is not buffered by a proxy.
-CORS_ALLOW_ALL_ORIGINS = True
+# ---- Sessions / CORS / CSRF -------------------------------------------------
+# The browser reaches Django directly (not through Next) so SSE is not buffered
+# by a proxy. That makes every call cross-origin, so the session cookie is sent
+# with credentials and the frontend origin must be listed explicitly.
+# Frontend and API must share a site (e.g. localhost:3000 + localhost:8000, or
+# app.example.com + api.example.com) for SameSite=Lax cookies to be sent.
+CORS_ALLOWED_ORIGINS = _env_list("CORS_ALLOWED_ORIGINS", "http://localhost:3000")
+CORS_ALLOW_CREDENTIALS = True
+CSRF_TRUSTED_ORIGINS = _env_list("CSRF_TRUSTED_ORIGINS", "http://localhost:3000")
+
+SESSION_COOKIE_AGE = 60 * 60 * 24 * 14
+SESSION_COOKIE_HTTPONLY = True
+SESSION_COOKIE_SAMESITE = "Lax"
+CSRF_COOKIE_SAMESITE = "Lax"
+# Off by default because local development is plain HTTP. Turn both on behind TLS.
+SESSION_COOKIE_SECURE = _env_bool("SESSION_COOKIE_SECURE")
+CSRF_COOKIE_SECURE = _env_bool("CSRF_COOKIE_SECURE")
 
 # ---- Redis / Celery ---------------------------------------------------------
 REDIS_URL = os.environ.get("REDIS_URL", "redis://redis:6379/0")
+# Shared cache so login throttling counts across every uvicorn worker.
+CACHES = {
+    "default": {
+        "BACKEND": "django.core.cache.backends.redis.RedisCache",
+        "LOCATION": REDIS_URL,
+    }
+}
 CELERY_BROKER_URL = REDIS_URL
 CELERY_RESULT_BACKEND = REDIS_URL
 CELERY_TASK_ACKS_LATE = True

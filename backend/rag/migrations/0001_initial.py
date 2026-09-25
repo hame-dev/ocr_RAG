@@ -4,7 +4,9 @@ import django.db.models.deletion
 import pgvector.django.indexes
 import pgvector.django.vector
 import uuid
+from django.contrib.postgres.operations import TrigramExtension
 from django.db import migrations, models
+from pgvector.django import VectorExtension
 
 
 class Migration(migrations.Migration):
@@ -16,6 +18,11 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
+        # docker/postgres/initdb creates these for the main database only; a
+        # database it did not create (the pytest test DB, a managed Postgres)
+        # needs them too. Both are IF NOT EXISTS, so this is a no-op otherwise.
+        VectorExtension(),
+        TrigramExtension(),
         migrations.CreateModel(
             name='IndexRun',
             fields=[

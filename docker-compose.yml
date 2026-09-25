@@ -15,6 +15,11 @@ x-django-env: &django-env
   DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:-dev-only-not-secret}
   DJANGO_DEBUG: ${DJANGO_DEBUG:-1}
   DJANGO_ALLOWED_HOSTS: ${DJANGO_ALLOWED_HOSTS:-*}
+  CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3000}
+  CSRF_TRUSTED_ORIGINS: ${CSRF_TRUSTED_ORIGINS:-http://localhost:3000}
+  SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-0}
+  CSRF_COOKIE_SECURE: ${CSRF_COOKIE_SECURE:-0}
+  LOGIN_THROTTLE_RATE: ${LOGIN_THROTTLE_RATE:-5/min}
   DATABASE_URL: postgresql://${POSTGRES_USER:-ocrrag}:${POSTGRES_PASSWORD:-ocrrag}@db:5432/${POSTGRES_DB:-ocrrag}
   REDIS_URL: redis://redis:6379/0
   MEDIA_ROOT: /data/media
@@ -155,6 +160,10 @@ services:
       dockerfile: ../docker/frontend/Dockerfile
     environment:
       NEXT_PUBLIC_API_BASE: ${NEXT_PUBLIC_API_BASE:-http://localhost:8000}
+      # Cap V8's heap below the container limit: otherwise the dev compiler's
+      # heap grows until the kernel OOM-kills it mid-compile instead of Node
+      # garbage-collecting.
+      NODE_OPTIONS: --max-old-space-size=2560
     volumes:
       - ./frontend:/app
       - /app/node_modules
@@ -163,7 +172,7 @@ services:
       - "3000:3000"
     depends_on:
       backend: {condition: service_started}
-    mem_limit: 2g
+    mem_limit: 3g
 
   # ---- Optional engine sidecars ---------------------------------------------
   # EasyOCR: ~1.5GB torch dep tree, isolated so its size and OOM behaviour never

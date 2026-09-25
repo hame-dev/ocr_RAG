@@ -26,9 +26,11 @@ export const metadata: Metadata = {
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
-  // Arabic is the default locale, so the app is RTL out of the box.
+  // English is the default locale; the head script switches to the stored
+  // choice (e.g. Arabic/RTL) before first paint. suppressHydrationWarning
+  // covers that deliberate lang/dir difference from the server HTML.
   return (
-    <html lang="ar" dir="rtl" className={`${ui.variable} ${doc.variable}`}>
+    <html lang="en" dir="ltr" className={`${ui.variable} ${doc.variable}`} suppressHydrationWarning>
       <head>
         {/* Blocking, so the stored theme lands on <html> before first paint and
             a dark-theme user never sees a white flash. */}

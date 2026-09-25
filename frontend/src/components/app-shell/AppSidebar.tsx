@@ -1,0 +1,235 @@
+"use client";
+
+import { Fragment } from "react";
+import Link from "next/link";
+import { usePathname } from "next/navigation";
+import { useQuery } from "@tanstack/react-query";
+import {
+  ChevronsUpDown, FolderOpen, Languages, LogOut, MessagesSquare, Monitor, Moon,
+  PanelLeftClose, PanelLeftOpen, ScanText, Settings, SquarePen, Sun, Upload,
+} from "lucide-react";
+import { api, ConversationSummary } from "@/lib/api";
+import { StringKey } from "@/lib/i18n";
+import { ThemeMode } from "@/lib/theme";
+import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel,
+  DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuSeparator, DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Hint } from "@/components/ui/tooltip";
+import { useAuth } from "../AuthProvider";
+import { useLocale, useTheme } from "../Providers";
+
+const NAV: { href: string; label: StringKey; icon: typeof FolderOpen; match: (p: string) => boolean }[] = [
+  { href: "/", label: "library", icon: FolderOpen, match: (p) => p === "/" || p.startsWith("/documents") },
+  { href: "/upload", label: "upload", icon: Upload, match: (p) => p.startsWith("/upload") },
+  { href: "/chat", label: "chat", icon: MessagesSquare, match: (p) => p.startsWith("/chat") },
+  { href: "/settings", label: "settings", icon: Settings, match: (p) => p.startsWith("/settings") },
+];
+
+export function BrandMark({ className }: { className?: string }) {
+  return (
+    <span
+      className={cn(
+        "grid size-8 shrink-0 place-items-center rounded-lg bg-primary text-primary-foreground shadow-sm",
+        className,
+      )}
+      aria-hidden
+    >
+      <ScanText className="size-[18px]" />
+    </span>
+  );
+}
+
+interface AppSidebarProps {
+  /** Icon-only rail (desktop). Ignored in the mobile sheet. */
+  collapsed?: boolean;
+  onToggleCollapsed?: () => void;
+  /** Called after any navigation, so the mobile sheet can close itself. */
+  onNavigate?: () => void;
+}
+
+export function AppSidebar({ collapsed = false, onToggleCollapsed, onNavigate }: AppSidebarProps) {
+  const { t } = useLocale();
+  const pathname = usePathname();
+  const activeChat = pathname.startsWith("/chat/") ? pathname.split("/")[2] : null;
+  const { data } = useQuery({
+    queryKey: ["conversations"],
+    queryFn: () => api<{ results: ConversationSummary[] }>("/api/conversations/"),
+  });
+  const conversations = data?.results ?? [];
+
+  const item = (href: string, label: string, Icon: typeof FolderOpen, active: boolean) => {
+    const link = (
+      <Link
+        href={href}
+        onClick={onNavigate}
+        aria-current={active ? "page" : undefined}
+        className={cn(
+          "flex h-9 items-center gap-3 rounded-lg px-2.5 text-sm transition-colors",
+          active
+            ? "bg-accent font-medium text-foreground"
+            : "text-muted-foreground hover:bg-accent/60 hover:text-foreground",
+          collapsed && "justify-center px-0",
+        )}
+      >
+        <Icon className="size-[18px] shrink-0" />
+        {!collapsed && <span className="truncate">{label}</span>}
+      </Link>
+    );
+    return collapsed ? <Hint label={label} side="right">{link}</Hint> : link;
+  };
+
+  return (
+    <div className="flex h-full min-h-0 flex-col">
+      <div className={cn("flex h-14 items-center gap-2.5 px-3", collapsed && "justify-center px-0")}>
+        {!collapsed && (
+          <Link href="/" onClick={onNavigate} className="flex min-w-0 flex-1 items-center gap-2.5">
+            <BrandMark />
+            <span className="truncate text-sm font-semibold tracking-tight">{t("appName")}</span>
+          </Link>
+        )}
+        {onToggleCollapsed && (
+          <Hint label={t("toggleSidebar")} side="right">
+            <Button variant="ghost" size="icon-sm" onClick={onToggleCollapsed} aria-label={t("toggleSidebar")}>
+              {collapsed ? <PanelLeftOpen className="rtl:-scale-x-100" /> : <PanelLeftClose className="rtl:-scale-x-100" />}
+            </Button>
+          </Hint>
+        )}
+      </div>
+
+      <div className={cn("px-3 pb-2", collapsed && "px-2")}>
+        {collapsed ? (
+          <Hint label={t("newChat")} side="right">
+            <Button asChild variant="outline" size="icon" className="w-full">
+              <Link href="/chat" onClick={onNavigate} aria-label={t("newChat")}>
+                <SquarePen />
+              </Link>
+            </Button>
+          </Hint>
+        ) : (
+          <Button asChild variant="outline" className="w-full justify-start gap-2.5 bg-background">
+            <Link href="/chat" onClick={onNavigate}>
+              <SquarePen />
+              {t("newChat")}
+            </Link>
+          </Button>
+        )}
+      </div>
+
+      <nav className={cn("space-y-0.5 px-3 py-2", collapsed && "px-2")} aria-label={t("appNavigation")}>
+        {NAV.map((entry) => (
+          <Fragment key={entry.href}>
+            {item(entry.href, t(entry.label), entry.icon, entry.match(pathname) && !activeChat)}
+          </Fragment>
+        ))}
+      </nav>
+
+      {!collapsed ? (
+        <div className="mt-2 flex min-h-0 flex-1 flex-col">
+          <p className="px-5 pb-1.5 pt-2 text-xs font-medium text-muted-foreground">{t("recentChats")}</p>
+          <div className="scrollbar-thin min-h-0 flex-1 overflow-y-auto px-3 pb-3">
+            {conversations.length === 0 ? (
+              <p className="px-2.5 py-2 text-xs text-muted-foreground">{t("noConversations")}</p>
+            ) : (
+              <ul className="space-y-0.5">
+                {conversations.slice(0, 30).map((conversation) => {
+                  const active = conversation.id === activeChat;
+                  return (
+                    <li key={conversation.id}>
+                      <Link
+                        href={`/chat/${conversation.id}`}
+                        onClick={onNavigate}
+                        aria-current={active ? "page" : undefined}
+                        className={cn(
+                          "block truncate rounded-lg px-2.5 py-1.5 text-sm transition-colors",
+                          active
+                            ? "bg-accent font-medium text-foreground"
+                            : "text-muted-foreground hover:bg-accent/60 hover:text-foreground",
+                        )}
+                        dir="auto"
+                      >
+                        {conversation.title || t("untitled")}
+                      </Link>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </div>
+        </div>
+      ) : (
+        <div className="flex-1" />
+      )}
+
+      <div className={cn("border-t p-2", collapsed && "flex justify-center")}>
+        <UserMenu collapsed={collapsed} />
+      </div>
+    </div>
+  );
+}
+
+function UserMenu({ collapsed }: { collapsed: boolean }) {
+  const { t, locale, setLocale } = useLocale();
+  const { mode, setMode } = useTheme();
+  const { user, logout } = useAuth();
+  const initial = (user?.username ?? "?").charAt(0).toUpperCase();
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          aria-label={t("accountMenu")}
+          className={cn(
+            "flex w-full items-center gap-2.5 rounded-lg p-1.5 text-start transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+            collapsed && "w-auto",
+          )}
+        >
+          <span className="grid size-8 shrink-0 place-items-center rounded-full bg-primary/15 text-sm font-semibold text-primary">
+            {initial}
+          </span>
+          {!collapsed && (
+            <>
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-sm font-medium" dir="ltr">{user?.username}</span>
+                <span className="block truncate text-xs text-muted-foreground">
+                  {t("account")}
+                </span>
+              </span>
+              <ChevronsUpDown className="size-4 shrink-0 text-muted-foreground" />
+            </>
+          )}
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent side="top" align="start" className="w-60">
+        <DropdownMenuLabel>
+          {t("signedInAs")} <span className="text-foreground" dir="ltr">{user?.username}</span>
+        </DropdownMenuLabel>
+        <DropdownMenuSeparator />
+        <DropdownMenuLabel className="flex items-center gap-2">
+          <Languages className="size-3.5" /> {t("language")}
+        </DropdownMenuLabel>
+        <DropdownMenuRadioGroup value={locale} onValueChange={(v) => setLocale(v as "en" | "ar")}>
+          <DropdownMenuRadioItem value="en">English</DropdownMenuRadioItem>
+          <DropdownMenuRadioItem value="ar">العربية</DropdownMenuRadioItem>
+        </DropdownMenuRadioGroup>
+        <DropdownMenuSeparator />
+        <DropdownMenuLabel>{t("theme")}</DropdownMenuLabel>
+        <DropdownMenuRadioGroup value={mode} onValueChange={(v) => setMode(v as ThemeMode)}>
+          <DropdownMenuRadioItem value="system"><Monitor /> {t("themeSystem")}</DropdownMenuRadioItem>
+          <DropdownMenuRadioItem value="light"><Sun /> {t("themeLight")}</DropdownMenuRadioItem>
+          <DropdownMenuRadioItem value="dark"><Moon /> {t("themeDark")}</DropdownMenuRadioItem>
+        </DropdownMenuRadioGroup>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem asChild>
+          <Link href="/settings"><Settings /> {t("settings")}</Link>
+        </DropdownMenuItem>
+        <DropdownMenuItem destructive onSelect={() => void logout()}>
+          <LogOut className="rtl:-scale-x-100" /> {t("signOut")}
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}

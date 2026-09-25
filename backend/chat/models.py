@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import uuid
 
+from django.conf import settings
 from django.contrib.postgres.fields import ArrayField
 from django.db import models
 
@@ -17,6 +18,14 @@ class Conversation(models.Model):
     """
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    # Nullable for the same reason as Document.owner.
+    owner = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.CASCADE,
+        related_name="conversations",
+    )
     title = models.CharField(max_length=512, blank=True)
     scope = models.CharField(max_length=16, default="all")  # all | selected
     document_ids = ArrayField(models.UUIDField(), default=list, blank=True)

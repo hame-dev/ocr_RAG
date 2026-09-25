@@ -3,86 +3,125 @@
 @tailwind utilities;
 
 /*
- * Theme tokens.
+ * Design tokens (shadcn/ui convention: space-separated HSL, consumed as
+ * `hsl(var(--token))` so Tailwind can apply opacity modifiers).
  *
- * Three independent axes, all driven by attributes on <html> so a theme change
- * is one attribute write and never a React re-render of the tree:
- *   data-theme="light|dark"  — explicit choice; absent means "follow the OS"
- *   data-accent="<name>"     — accent hue
+ * Two independent axes, both attributes on <html>, so a theme change is one
+ * attribute write and never a React re-render:
+ *   data-theme="light|dark"  explicit choice; absent means "follow the OS"
+ *   data-accent="<name>"     brand hue, with a light and a dark variant
  *
- * Light is the base palette so every token has a definition outside any media
- * or attribute block; dark only redefines what changes.
+ * `--primary` points at the light or dark member of the accent pair, so the
+ * accent and the theme compose without ordering tricks.
  */
-:root {
-  --bg: #ffffff;
-  --fg: #111827;
-  --muted: #6b7280;
-  --border: #e5e7eb;
-  --card: #ffffff;
-  --hover: #f3f4f6;
-  --code-bg: #f3f4f6;
-  --sidebar: #f7f7f5;
-  --user-bubble: #f1f1ef;
-  --composer: #ffffff;
+@layer base {
+  :root {
+    --background: 0 0% 100%;
+    --foreground: 240 10% 3.9%;
+    --card: 0 0% 100%;
+    --card-foreground: 240 10% 3.9%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 240 10% 3.9%;
+    --secondary: 240 4.8% 95.9%;
+    --secondary-foreground: 240 5.9% 10%;
+    --muted: 240 4.8% 95.9%;
+    --muted-foreground: 240 3.8% 42%;
+    /* shadcn "accent" is the subtle hover/selected surface, not the brand. */
+    --accent: 240 4.8% 95.9%;
+    --accent-foreground: 240 5.9% 10%;
+    --border: 240 5.9% 90%;
+    --input: 240 5.9% 88%;
+    --sidebar: 240 5% 97.6%;
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 100%;
+    --success: 142 71% 32%;
+    --warning: 32 95% 40%;
 
-  /* Accent defaults to blue; data-accent overrides both light and dark pairs. */
-  --accent: #2563eb;
-  --accent-dark: #60a5fa;
-}
+    --primary-l: 221 83% 53%;
+    --primary-d: 213 94% 68%;
+    --primary: var(--primary-l);
+    --primary-foreground: 0 0% 100%;
+    --ring: var(--primary);
 
-/* Follow the OS only when the user has not made an explicit choice. */
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
-    --bg: #0b0f19;
-    --fg: #e5e7eb;
-    --muted: #9ca3af;
-    --border: #1f2937;
-    --card: #111827;
-    --hover: #1a2233;
-    --code-bg: #1a2233;
-    --sidebar: #0e1420;
-    --user-bubble: #1a2233;
-    --composer: #111827;
-    --accent: var(--accent-dark);
+    --radius: 0.75rem;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --background: 240 7% 5.5%;
+      --foreground: 240 5% 94%;
+      --card: 240 6% 8%;
+      --card-foreground: 240 5% 94%;
+      --popover: 240 6% 9%;
+      --popover-foreground: 240 5% 94%;
+      --secondary: 240 4% 14%;
+      --secondary-foreground: 240 5% 94%;
+      --muted: 240 4% 14%;
+      --muted-foreground: 240 5% 64%;
+      --accent: 240 4% 15%;
+      --accent-foreground: 240 5% 94%;
+      --border: 240 4% 16%;
+      --input: 240 4% 20%;
+      --sidebar: 240 7% 7%;
+      --destructive: 0 72% 60%;
+      --success: 142 60% 50%;
+      --warning: 38 92% 58%;
+      --primary: var(--primary-d);
+      --primary-foreground: 240 10% 4%;
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --background: 240 7% 5.5%;
+    --foreground: 240 5% 94%;
+    --card: 240 6% 8%;
+    --card-foreground: 240 5% 94%;
+    --popover: 240 6% 9%;
+    --popover-foreground: 240 5% 94%;
+    --secondary: 240 4% 14%;
+    --secondary-foreground: 240 5% 94%;
+    --muted: 240 4% 14%;
+    --muted-foreground: 240 5% 64%;
+    --accent: 240 4% 15%;
+    --accent-foreground: 240 5% 94%;
+    --border: 240 4% 16%;
+    --input: 240 4% 20%;
+    --sidebar: 240 7% 7%;
+    --destructive: 0 72% 60%;
+    --success: 142 60% 50%;
+    --warning: 38 92% 58%;
+    --primary: var(--primary-d);
+    --primary-foreground: 240 10% 4%;
+  }
+
+  /* Accent pairs: the light member passes contrast on white, the dark member
+     stays legible on the near-black card surface. */
+  :root[data-accent="blue"]    { --primary-l: 221 83% 53%; --primary-d: 213 94% 68%; }
+  :root[data-accent="violet"]  { --primary-l: 262 83% 58%; --primary-d: 255 92% 76%; }
+  :root[data-accent="emerald"] { --primary-l: 161 94% 30%; --primary-d: 158 64% 52%; }
+  :root[data-accent="amber"]   { --primary-l: 26 90% 37%;  --primary-d: 43 96% 56%; }
+  :root[data-accent="rose"]    { --primary-l: 347 77% 50%; --primary-d: 351 95% 71%; }
+  :root[data-accent="teal"]    { --primary-l: 175 84% 32%; --primary-d: 172 66% 50%; }
+
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-feature-settings: "cv11", "ss01";
+  }
+
+  ::selection {
+    background: hsl(var(--primary) / 0.22);
   }
 }
 
-/* An explicit dark choice wins in both directions. */
-:root[data-theme="dark"] {
-  --bg: #0b0f19;
-  --fg: #e5e7eb;
-  --muted: #9ca3af;
-  --border: #1f2937;
-  --card: #111827;
-  --hover: #1a2233;
-  --code-bg: #1a2233;
-  --sidebar: #0e1420;
-  --user-bubble: #1a2233;
-  --composer: #111827;
-  --accent: var(--accent-dark);
-}
-
-/* ---- Accent palettes ------------------------------------------------------
- * Each pair is tuned so the light value passes contrast on white and the dark
- * value stays legible on the near-black card background.
- */
-:root[data-accent="blue"]   { --accent: #2563eb; --accent-dark: #60a5fa; }
-:root[data-accent="violet"] { --accent: #7c3aed; --accent-dark: #a78bfa; }
-:root[data-accent="emerald"]{ --accent: #059669; --accent-dark: #34d399; }
-:root[data-accent="amber"]  { --accent: #b45309; --accent-dark: #fbbf24; }
-:root[data-accent="rose"]   { --accent: #e11d48; --accent-dark: #fb7185; }
-:root[data-accent="teal"]   { --accent: #0d9488; --accent-dark: #2dd4bf; }
-
-/* Re-assert the dark member of the pair after the palette block, since the
-   palette rules above reset --accent to its light value at equal specificity. */
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"])[data-accent] { --accent: var(--accent-dark); }
-}
-:root[data-theme="dark"][data-accent] { --accent: var(--accent-dark); }
-
-body {
-  background: var(--bg);
-  color: var(--fg);
+@layer utilities {
+  .scrollbar-thin {
+    scrollbar-width: thin;
+    scrollbar-color: hsl(var(--border)) transparent;
+  }
 }
 
 /*
@@ -102,98 +141,12 @@ body {
   word-break: break-word;
 }
 
-/* Per-line direction in the editor. A single document-level dir scrambles
-   mixed Arabic/English content. */
-.doc-line {
-  unicode-bidi: plaintext;
-  display: block;
-}
-
 /* Latin digits everywhere for IDs, amounts, page numbers and confidences.
    Arabic-Indic digits in a comparison table make correct OCR look wrong. */
 .numeric {
   font-variant-numeric: tabular-nums;
   direction: ltr;
   unicode-bidi: isolate;
-}
-
-.card {
-  background: var(--card);
-  border: 1px solid var(--border);
-  border-radius: 0.75rem;
-}
-
-/* ---- Chat workspace ------------------------------------------------------ */
-.chat-nav-link {
-  display: flex;
-  align-items: center;
-  gap: 0.65rem;
-  width: 100%;
-  min-height: 2.25rem;
-  border-radius: 0.75rem;
-  padding: 0.45rem 0.65rem;
-  text-align: start;
-  transition: background-color 150ms ease;
-}
-
-.chat-nav-link:hover,
-.chat-nav-active {
-  background: var(--hover);
-}
-
-.composer-shell {
-  overflow: visible;
-  border: 1px solid var(--border);
-  border-radius: 1.25rem;
-  background: var(--composer);
-  box-shadow: 0 8px 28px rgb(15 23 42 / 0.08);
-}
-
-:root[data-theme="dark"] .composer-shell {
-  box-shadow: 0 12px 35px rgb(0 0 0 / 0.28);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) .composer-shell {
-    box-shadow: 0 12px 35px rgb(0 0 0 / 0.28);
-  }
-}
-
-.composer-control {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.3rem;
-  min-height: 2.1rem;
-  max-width: 11rem;
-  border-radius: 9999px;
-  padding-inline: 0.65rem;
-  border: 0;
-  background: transparent;
-  color: var(--muted);
-  font-size: 0.75rem;
-  line-height: 1;
-  cursor: pointer;
-  outline: none;
-}
-
-.composer-control:hover,
-.composer-control:focus-visible {
-  background: var(--hover);
-  color: var(--fg);
-}
-
-.composer-control:disabled {
-  cursor: not-allowed;
-  opacity: 0.5;
-}
-
-.chat-composer-dock {
-  background: linear-gradient(to bottom, transparent, var(--bg) 1.25rem);
-}
-
-/* Directional icons must flip in RTL. */
-[dir="rtl"] .flip-rtl {
-  transform: scaleX(-1);
 }
 
 /* ---- Markdown ------------------------------------------------------------
@@ -203,7 +156,7 @@ body {
  */
 .md {
   unicode-bidi: plaintext;
-  line-height: 1.85;
+  line-height: 1.8;
   word-break: break-word;
 }
 
@@ -235,10 +188,10 @@ body {
 .md ul { list-style: disc; }
 .md ol { list-style: decimal; }
 .md li { margin-block: 0.25em; }
-.md li::marker { color: var(--muted); }
+.md li::marker { color: hsl(var(--muted-foreground)); }
 
 .md a {
-  color: var(--accent);
+  color: hsl(var(--primary));
   text-decoration: underline;
   text-underline-offset: 2px;
 }
@@ -247,9 +200,9 @@ body {
 .md em { font-style: italic; }
 
 .md blockquote {
-  border-inline-start: 3px solid var(--border);
+  border-inline-start: 3px solid hsl(var(--border));
   padding-inline-start: 0.9em;
-  color: var(--muted);
+  color: hsl(var(--muted-foreground));
 }
 
 /* Code is always LTR — an Arabic-direction code block is unreadable. */
@@ -258,7 +211,7 @@ body {
   unicode-bidi: isolate;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 0.875em;
-  background: var(--code-bg);
+  background: hsl(var(--muted));
   padding: 0.15em 0.35em;
   border-radius: 0.3rem;
 }
@@ -266,9 +219,9 @@ body {
 .md pre {
   direction: ltr;
   unicode-bidi: isolate;
-  background: var(--code-bg);
-  border: 1px solid var(--border);
-  border-radius: 0.5rem;
+  background: hsl(var(--muted));
+  border: 1px solid hsl(var(--border));
+  border-radius: 0.6rem;
   padding: 0.75rem;
   overflow-x: auto;
 }
@@ -278,23 +231,23 @@ body {
   font-size: 0.85em;
 }
 
-/* Wide tables scroll inside their own bubble instead of stretching it. */
+/* Wide tables scroll inside their own block instead of stretching it. */
 .md .md-table-wrap { overflow-x: auto; margin-block: 0.65em; }
 .md table { border-collapse: collapse; width: 100%; font-size: 0.9em; }
 .md th, .md td {
-  border: 1px solid var(--border);
+  border: 1px solid hsl(var(--border));
   padding: 0.4em 0.6em;
   text-align: start;
 }
-.md th { background: var(--hover); font-weight: 600; }
+.md th { background: hsl(var(--muted)); font-weight: 600; }
 
-.md hr { border: 0; border-top: 1px solid var(--border); margin-block: 1em; }
+.md hr { border: 0; border-top: 1px solid hsl(var(--border)); margin-block: 1em; }
 
 .mermaid-diagram {
   margin-block: 1rem;
-  border: 1px solid var(--border);
-  border-radius: 0.75rem;
-  background: var(--card);
+  border: 1px solid hsl(var(--border));
+  border-radius: var(--radius);
+  background: hsl(var(--card));
   padding: 0.75rem;
 }
 
@@ -305,18 +258,6 @@ body {
   height: auto;
   margin-inline: auto;
 }
-
-/* The user bubble is filled with --accent, so markdown inside it inherits
-   white and needs its own surfaces. */
-.md-on-accent code,
-.md-on-accent pre,
-.md-on-accent th { background: rgba(255, 255, 255, 0.18); }
-.md-on-accent a { color: inherit; }
-.md-on-accent blockquote { border-color: rgba(255, 255, 255, 0.45); color: inherit; }
-.md-on-accent th,
-.md-on-accent td,
-.md-on-accent pre { border-color: rgba(255, 255, 255, 0.3); }
-.md-on-accent li::marker { color: inherit; }
 
 /* Streaming cursor: a block that trails the last token as it arrives. */
 .md-cursor {

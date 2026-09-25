@@ -97,6 +97,10 @@ def hybrid_search(
 ) -> list[dict]:
     if not query or not query.strip():
         return []
+    # `None` means "no restriction"; an empty list means "nothing is in scope"
+    # (e.g. a user with no documents) and must never widen to the whole corpus.
+    if doc_ids is not None and not doc_ids:
+        return []
 
     try:
         vector = get_client().embed([query])[0]
@@ -107,7 +111,7 @@ def hybrid_search(
     params = {
         "qtext": query,
         "qvec": _vector_literal(vector) if vector else None,
-        "doc_ids": list(doc_ids) if doc_ids else None,
+        "doc_ids": list(doc_ids) if doc_ids is not None else None,
         "doc_type": doc_type,
         "lang": lang,
         "top_k": top_k,

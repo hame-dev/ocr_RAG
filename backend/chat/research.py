@@ -6,6 +6,12 @@ from typing import Literal, TypedDict
 ResearchMode = Literal["fast", "balanced", "deep"]
 DEFAULT_RESEARCH_MODE: ResearchMode = "balanced"
 
+# "documents" is the cited RAG agent; "general" is the plain LLM with no tools
+# and no access to the library. Chosen per message, so one thread can mix both.
+ChatMode = Literal["documents", "general"]
+DEFAULT_CHAT_MODE: ChatMode = "documents"
+CHAT_MODES: tuple[ChatMode, ...] = ("documents", "general")
+
 
 class ResearchProfile(TypedDict):
     top_k: int
@@ -55,3 +61,7 @@ def normalize_research_mode(value: object) -> ResearchMode | None:
 def research_profile(mode: str) -> ResearchProfile:
     normalized = normalize_research_mode(mode) or DEFAULT_RESEARCH_MODE
     return RESEARCH_PROFILES[normalized]
+
+
+def normalize_chat_mode(value: object) -> ChatMode | None:
+    return value if isinstance(value, str) and value in CHAT_MODES else None

@@ -1,245 +1,247 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
+import { useEffect, useState } from "react";
+import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
 import {
-  createConversation, enrich, finalizeText, getComparison, getDocument,
-  getExtractionPlan, getMetadata, listEngines, saveRevision, selectRun, startOcr,
+  ChevronRight, FileQuestion, Layers, Loader2, MessagesSquare, MoreHorizontal, RotateCw, ScanText,
+} from "lucide-react";
+import {
+  ApiError, createConversation, getDocument, getExtractionPlan, getMetadata, listEngines,
+  retryDocument, selectRun, startOcr,
 } from "@/lib/api";
-import { subscribeToDocument } from "@/lib/sse";
+import { pages as pagesLabel, relativeTime } from "@/lib/format";
 import { useLocale } from "@/components/Providers";
-import { EngineProgress, OcrProgressPanel } from "@/components/OcrProgressPanel";
-import { OcrComparisonGrid } from "@/components/OcrComparisonGrid";
-import { EngineSelector } from "@/components/EngineSelector";
-import { TextEditor } from "@/components/TextEditor";
-import { MetadataPanel } from "@/components/MetadataPanel";
 import { StatusBadge } from "@/components/StatusBadge";
+import { EmptyState, Page } from "@/components/app-shell/Page";
+import { ChatStep } from "@/components/document/ChatStep";
+import { DetailsStep } from "@/components/document/DetailsStep";
+import { ExtractStep } from "@/components/document/ExtractStep";
+import { ReviewStep } from "@/components/document/ReviewStep";
+import { CHAT_READY, initialStep, Step, Stepper, stepProgress } from "@/components/document/Stepper";
+import { useDocumentStream } from "@/components/document/useDocumentStream";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Skeleton } from "@/components/ui/skeleton";
+
+const PREPARING = ["uploaded", "preprocessing"];
 
 export default function DocumentPage() {
-  const { t } = useLocale();
+  const { t, locale } = useLocale();
   const router = useRouter();
+  const queryClient = useQueryClient();
   const { id } = useParams<{ id: string }>();
+  const [step, setStep] = useState<Step | null>(null);
 
-  const [snapshot, setSnapshot] = useState<any>(null);
-  const [progress, setProgress] = useState<Record<string, EngineProgress>>({});
-  const [batchId, setBatchId] = useState<string | null>(null);
-  const [startedAt, setStartedAt] = useState<number | null>(null);
-  const [comparison, setComparison] = useState<any>(null);
-  const [text, setText] = useState<string>("");
-  const [selected, setSelected] = useState<string[]>([]);
-  const [busy, setBusy] = useState(false);
-  const batchRef = useRef<string | null>(null);
-  const defaultEngineAppliedRef = useRef(false);
-
-  const { data: doc, refetch: refetchDoc } = useQuery({
+  const docQuery = useQuery({
     queryKey: ["document", id],
     queryFn: () => getDocument(id),
+    retry: (count, error) => !(error instanceof ApiError && error.status === 404) && count < 2,
   });
+  const doc = docQuery.data;
   const { data: engineData } = useQuery({ queryKey: ["engines"], queryFn: () => listEngines() });
-  const engines = engineData?.engines ?? [];
-
-  useEffect(() => {
-    if (!engineData || defaultEngineAppliedRef.current) return;
-    defaultEngineAppliedRef.current = true;
-    const defaultEngine = engineData.engines.find(
-      (engine) => engine.name === engineData.default_engine && engine.available,
-    );
-    if (defaultEngine) setSelected([defaultEngine.name]);
-  }, [engineData]);
-
-  const { data: metadata, refetch: refetchMetadata } = useQuery({
+  const metadataQuery = useQuery({
     queryKey: ["metadata", id],
     queryFn: () => getMetadata(id).catch(() => null),
   });
-  const { data: plan, refetch: refetchPlan } = useQuery({
+  const planQuery = useQuery({
     queryKey: ["plan", id],
     queryFn: () => getExtractionPlan(id).catch(() => null),
   });
 
-  const loadComparison = useCallback(async (bid: string) => {
-    try {
-      setComparison(await getComparison(bid));
-    } catch {
-      /* not ready yet */
-    }
-  }, []);
+  const stream = useDocumentStream(id, {
+    onStatus: (to) => {
+      void queryClient.invalidateQueries({ queryKey: ["document", id] });
+      void queryClient.invalidateQueries({ queryKey: ["documents"] });
+      if (["enriched", "ready", "indexed"].includes(to)) {
+        void metadataQuery.refetch();
+        void planQuery.refetch();
+      }
+    },
+    onMetadata: () => {
+      void metadataQuery.refetch();
+      void planQuery.refetch();
+      void queryClient.invalidateQueries({ queryKey: ["document", id] });
+    },
+  });
 
-  // One SSE subscription for the whole page. Every stage — preprocessing, each
-  // engine's per-page progress, enrichment, indexing — arrives here.
+  const status = stream.liveStatus ?? doc?.status ?? "uploaded";
+  const revisionNo = doc?.current_revision_no ?? null;
+  const done = stepProgress(status, revisionNo);
+
+  // Open on the step that matches where the document is, once.
   useEffect(() => {
-    if (!id) return;
-    return subscribeToDocument(id, {
-      snapshot: (data) => {
-        setSnapshot(data);
-        const latest = data.batches?.[0];
-        if (latest) {
-          batchRef.current = latest.batch_id;
-          setBatchId(latest.batch_id);
-          const next: Record<string, EngineProgress> = {};
-          for (const run of latest.runs ?? []) {
-            next[run.engine] = {
-              engine: run.engine,
-              status: run.status,
-              page: run.status === "succeeded" ? 1 : 0,
-              of: data.page_count ?? 1,
-              durationMs: run.duration_ms,
-              charCount: run.char_count,
-              error: run.error_message,
-            };
-          }
-          setProgress(next);
-          if (latest.runs?.some((r: any) => r.status === "succeeded")) {
-            void loadComparison(latest.batch_id);
-          }
-        }
-      },
-      status_change: (data) => {
-        setSnapshot((s: any) => ({ ...s, status: data.to }));
-        void refetchDoc();
-        if (["enriched", "ready", "indexed"].includes(data.to)) {
-          void refetchMetadata();
-          void refetchPlan();
-        }
-      },
-      ocr_run_started: (data) => {
-        setProgress((p) => ({
-          ...p,
-          [data.engine]: { ...(p[data.engine] ?? { engine: data.engine, page: 0, of: 1 }),
-                           engine: data.engine, status: "running" },
-        }));
-      },
-      // This is what makes the loading indicator advance instead of hanging.
-      ocr_page_done: (data) => {
-        setProgress((p) => ({
-          ...p,
-          [data.engine]: {
-            ...(p[data.engine] ?? { engine: data.engine, status: "running" }),
-            engine: data.engine, status: "running", page: data.page, of: data.of,
-          },
-        }));
-      },
-      ocr_run_finished: (data) => {
-        setProgress((p) => ({
-          ...p,
-          [data.engine]: {
-            ...(p[data.engine] ?? { engine: data.engine, page: 0, of: 1 }),
-            engine: data.engine, status: data.status,
-            durationMs: data.duration_ms, charCount: data.char_count,
-            error: data.error_message,
-          },
-        }));
-        // Refresh the grid as EACH engine lands, not once at the end.
-        if (batchRef.current) void loadComparison(batchRef.current);
-      },
-      batch_status: (data) => {
-        batchRef.current = data.batch_id;
-        setBatchId(data.batch_id);
-        if (data.final) void loadComparison(data.batch_id);
-      },
-      extraction_plan_ready: () => void refetchPlan(),
-      enrichment_done: () => { void refetchMetadata(); void refetchDoc(); },
-      indexed: () => void refetchDoc(),
-    });
-  }, [id, loadComparison, refetchDoc, refetchMetadata, refetchPlan]);
+    if (doc && step === null) setStep(initialStep(doc.status, doc.current_revision_no));
+  }, [doc, step]);
 
-  const status = snapshot?.status ?? doc?.status ?? "uploaded";
-  const pendingEngines = Object.values(progress)
-    .filter((p) => p.status === "queued" || p.status === "running")
-    .map((p) => p.engine);
-
-  async function runOcr() {
-    if (!selected.length) return;
-    setBusy(true);
-    setComparison(null);
-    setStartedAt(Date.now());
-    setProgress(
-      Object.fromEntries(
-        selected.map((e) => [e, { engine: e, status: "queued" as const, page: 0,
-                                  of: doc?.page_count ?? 1 }]),
-      ),
+  if (docQuery.isError) {
+    const missing = docQuery.error instanceof ApiError && docQuery.error.status === 404;
+    return (
+      <Page>
+        <EmptyState
+          icon={<FileQuestion />}
+          title={missing ? t("documentNotFound") : t("loadFailed")}
+          description={missing ? t("documentNotFoundHint") : undefined}
+          action={
+            missing
+              ? <Button asChild variant="outline"><Link href="/">{t("backToLibrary")}</Link></Button>
+              : <Button variant="outline" onClick={() => docQuery.refetch()}>{t("retry")}</Button>
+          }
+        />
+      </Page>
     );
+  }
+
+  if (!doc || step === null) {
+    return (
+      <Page>
+        <Skeleton className="mb-3 h-4 w-40" />
+        <Skeleton className="mb-6 h-8 w-72" />
+        <Skeleton className="mb-6 h-9 w-full max-w-lg" />
+        <Skeleton className="h-96 w-full rounded-xl" />
+      </Page>
+    );
+  }
+
+  async function runOcr(engines: string[]) {
     try {
-      const batch = await startOcr(id, selected, ["ara", "eng"]);
-      batchRef.current = batch.id;
-      setBatchId(batch.id);
-    } finally {
-      setBusy(false);
+      const batch = await startOcr(id, engines, ["ara", "eng"]);
+      stream.beginBatch(batch.id, engines, doc?.page_count ?? 1);
+      toast.success(t("ocrStarted"));
+    } catch (error) {
+      toast.error(t("actionFailed"), { description: error instanceof ApiError ? error.detail : undefined });
     }
   }
 
-  async function useRun(runId: string) {
-    const revision = await selectRun(id, runId);
-    setText(revision.text);
-    void refetchDoc();
+  async function pickResult(runId: string) {
+    try {
+      const revision = await selectRun(id, runId);
+      queryClient.setQueryData(["revision", id, revision.revision_no], revision);
+      await queryClient.invalidateQueries({ queryKey: ["document", id] });
+      setStep("review");
+    } catch (error) {
+      toast.error(t("actionFailed"), { description: error instanceof ApiError ? error.detail : undefined });
+    }
   }
 
   async function openChat() {
-    const conversation = await createConversation("selected", [id]);
-    router.push(`/chat/${conversation.id}`);
+    try {
+      const conversation = await createConversation("selected", [id]);
+      void queryClient.invalidateQueries({ queryKey: ["conversations"] });
+      router.push(`/chat/${conversation.id}`);
+    } catch (error) {
+      toast.error(t("actionFailed"), { description: error instanceof ApiError ? error.detail : undefined });
+    }
   }
 
-  return (
-    <div className="space-y-5">
-      <div className="flex flex-wrap items-center gap-3">
-        <h1 className="doc-text text-lg font-semibold" dir="auto">
-          {doc?.display_title ?? "…"}
-        </h1>
-        <StatusBadge status={status} />
-        {doc?.is_digital_pdf && (
-          <span className="rounded bg-green-500/10 px-2 py-0.5 text-xs text-green-700">
-            has text layer
-          </span>
-        )}
-        {/* The "chat with this document later" entry point. */}
-        {["ready", "indexed"].includes(status) && (
-          <button
-            onClick={openChat}
-            className="ms-auto rounded-md px-3 py-1.5 text-sm text-white"
-            style={{ background: "var(--accent)" }}
-          >
-            {t("chatWithDoc")}
-          </button>
-        )}
-      </div>
+  async function retry() {
+    const stage = revisionNo == null ? "preprocess" : done.review ? "enrich" : "preprocess";
+    try {
+      await retryDocument(id, stage);
+      toast.success(t("retryProcessing"));
+    } catch (error) {
+      toast.error(t("actionFailed"), { description: error instanceof ApiError ? error.detail : undefined });
+    }
+  }
 
-      {doc?.digital_text_report?.reason && (
-        <p className="text-xs" style={{ color: "var(--muted)" }}>
-          {doc.digital_text_report.reason}
-        </p>
+  const failed = status === "failed" || status === "ocr_failed";
+
+  return (
+    <Page className="max-w-7xl">
+      {/* Header */}
+      <nav className="mb-2 flex items-center gap-1 text-sm text-muted-foreground" aria-label="Breadcrumb">
+        <Link href="/" className="hover:text-foreground">{t("library")}</Link>
+        <ChevronRight className="size-3.5 rtl:-scale-x-100" />
+        <span className="truncate text-foreground" dir="auto">{doc.display_title}</span>
+      </nav>
+
+      <header className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-start">
+        <div className="min-w-0 flex-1">
+          <h1 className="truncate text-2xl font-semibold tracking-tight" dir="auto">{doc.display_title}</h1>
+          <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+            <StatusBadge status={status} />
+            {doc.page_count != null && (
+              <span className="flex items-center gap-1"><Layers className="size-3.5" /> {pagesLabel(doc.page_count, t)}</span>
+            )}
+            {doc.is_digital_pdf && <Badge variant="outline">{t("hasTextLayer")}</Badge>}
+            <span>{relativeTime(doc.created_at, locale)}</span>
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          {CHAT_READY.includes(status) && (
+            <Button onClick={() => void openChat()}>
+              <MessagesSquare /> {t("chatWithDoc")}
+            </Button>
+          )}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline" size="icon" aria-label={t("moreActions")}>
+                <MoreHorizontal />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem onSelect={() => setStep("extract")}>
+                <ScanText /> {t("runOcr")}
+              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => void retry()}>
+                <RotateCw /> {t("retryProcessing")}
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+      </header>
+
+      {failed && doc.error_message && (
+        <Alert variant="destructive" className="mb-6">
+          <AlertDescription className="flex flex-wrap items-center gap-3">
+            <span className="min-w-0 flex-1">{doc.error_message}</span>
+            <Button size="sm" variant="outline" onClick={() => void retry()}><RotateCw /> {t("retryProcessing")}</Button>
+          </AlertDescription>
+        </Alert>
       )}
 
-      <EngineSelector
-        engines={engines}
-        selected={selected}
-        onChange={setSelected}
-        pageCount={doc?.page_count ?? 1}
-        isDigital={!!doc?.is_digital_pdf}
-        onRun={runOcr}
-        busy={busy || pendingEngines.length > 0}
-      />
+      {PREPARING.includes(status) && (
+        <Alert className="mb-6">
+          <Loader2 className="animate-spin" />
+          <AlertDescription>{t("processing")}</AlertDescription>
+        </Alert>
+      )}
 
-      <OcrProgressPanel progress={progress} engines={engines} startedAt={startedAt} />
+      <div className="mb-6 border-b pb-4">
+        <Stepper current={step} done={done} onSelect={setStep} />
+      </div>
 
-      <OcrComparisonGrid
-        comparison={comparison}
-        pendingEngines={pendingEngines}
-        onSelect={useRun}
-      />
-
-      <TextEditor
-        documentId={id}
-        initialText={text}
-        currentRevisionNo={doc?.current_revision_no ?? null}
-        onSave={async (value) => { await saveRevision(id, value); void refetchDoc(); }}
-        onFinalize={async () => {
-          await finalizeText(id);
-          await enrich(id, doc?.metadata_mode ?? "auto");
-          void refetchDoc();
-        }}
-      />
-
-      <MetadataPanel metadata={metadata} plan={plan} />
-    </div>
+      <div key={step} className="animate-fade-in">
+        {step === "extract" && (
+          <ExtractStep
+            engines={engineData?.engines ?? []}
+            defaultEngine={engineData?.default_engine ?? null}
+            pageCount={doc.page_count ?? 1}
+            isDigital={!!doc.is_digital_pdf}
+            preparing={PREPARING.includes(status)}
+            progress={stream.progress}
+            pending={stream.pending}
+            comparison={stream.comparison}
+            onRun={runOcr}
+            onUseResult={pickResult}
+          />
+        )}
+        {step === "review" && (
+          <ReviewStep doc={doc} onGoToExtract={() => setStep("extract")} onFinalized={() => setStep("details")} />
+        )}
+        {step === "details" && (
+          <DetailsStep status={status} metadata={metadataQuery.data} plan={planQuery.data} onRetry={retry} />
+        )}
+        {step === "chat" && (
+          <ChatStep documentId={id} ready={CHAT_READY.includes(status)} onStart={openChat} />
+        )}
+      </div>
+    </Page>
   );
 }

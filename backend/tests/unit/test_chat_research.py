@@ -14,8 +14,9 @@ from chat.tools import TOOLS, search_documents
 from documents.models import Document
 
 
-def _document(*, title: str, status: str = "ready") -> Document:
+def _document(*, owner, title: str, status: str = "ready") -> Document:
     return Document.objects.create(
+        owner=owner,
         title=title,
         original_filename=f"{title}.pdf",
         mime_type="application/pdf",
@@ -25,11 +26,11 @@ def _document(*, title: str, status: str = "ready") -> Document:
 
 
 @pytest.mark.django_db
-def test_conversation_scope_patch_returns_selected_document_summaries(client):
-    document = _document(title="Annual report")
-    conversation = Conversation.objects.create()
+def test_conversation_scope_patch_returns_selected_document_summaries(auth_client, user):
+    document = _document(owner=user, title="Annual report")
+    conversation = Conversation.objects.create(owner=user)
 
-    response = client.patch(
+    response = auth_client.patch(
         f"/api/conversations/{conversation.id}/",
         data=json.dumps({"scope": "selected", "document_ids": [str(document.id)]}),
         content_type="application/json",
@@ -49,11 +50,11 @@ def test_conversation_scope_patch_returns_selected_document_summaries(client):
 
 
 @pytest.mark.django_db
-def test_conversation_scope_rejects_unavailable_documents(client):
-    document = _document(title="Still processing", status="ocr_running")
-    conversation = Conversation.objects.create()
+def test_conversation_scope_rejects_unavailable_documents(auth_client, user):
+    document = _document(owner=user, title="Still processing", status="ocr_running")
+    conversation = Conversation.objects.create(owner=user)
 
-    response = client.patch(
+    response = auth_client.patch(
         f"/api/conversations/{conversation.id}/",
         data=json.dumps({"scope": "selected", "document_ids": [str(document.id)]}),
         content_type="application/json",
@@ -66,13 +67,13 @@ def test_conversation_scope_rejects_unavailable_documents(client):
 
 
 @pytest.mark.django_db
-def test_clearing_scope_also_clears_document_ids(client):
-    document = _document(title="Scoped")
+def test_clearing_scope_also_clears_document_ids(auth_client, user):
+    document = _document(owner=user, title="Scoped")
     conversation = Conversation.objects.create(
-        scope="selected", document_ids=[document.id]
+        owner=user, scope="selected", document_ids=[document.id]
     )
 
-    response = client.patch(
+    response = auth_client.patch(
         f"/api/conversations/{conversation.id}/",
         data=json.dumps({"scope": "all", "document_ids": [str(document.id)]}),
         content_type="application/json",
@@ -150,9 +151,9 @@ def test_research_profiles_force_an_answer_at_their_tool_cap(mode, iterations, e
     assert _route(state) == expected
 
 
-def test_research_mode_validation_and_balanced_default(client):
+def test_research_mode_validation_and_balanced_default(auth_client):
     conversation_id = uuid.uuid4()
-    response = client.post(
+    response = auth_client.post(
         f"/api/conversations/{conversation_id}/stream/",
         data=json.dumps({"content": "hello", "research_mode": "extreme"}),
         content_type="application/json",
@@ -161,3 +162,29 @@ def test_research_mode_validation_and_balanced_default(client):
     assert response.status_code == 400
     assert normalize_research_mode("balanced") == "balanced"
     assert normalize_research_mode("extreme") is None
+
+
+@pytest.mark.asyncio
+async def test_search_retries_without_guessed_filters_when_they_match_nothing(monkeypatch):
+    calls = []
+
+    def fake_search(query, **kwargs):
+        calls.append(kwargs)
+        # Only the unfiltered search finds the passage.
+        if kwargs.get("doc_type") or kwargs.get("lang"):
+            return []
+        return [{"chunk_id": "c1"}]
+
+    monkeypatch.setattr("chat.tools.hybrid_search", fake_search)
+    monkeypatch.setattr("chat.tools.format_hits", lambda hits, **_: hits)
+    allowed = [str(uuid.uuid4())]
+
+    hits = await search_documents.coroutine(
+        query="annual rent", allowed_doc_ids=allowed, research_mode="balanced", doc_type="lease",
+    )
+
+    assert hits == [{"chunk_id": "c1"}]
+    assert calls[0]["doc_type"] == "lease"
+    assert calls[1].get("doc_type") is None
+    # The ownership scope is never dropped, only the guessed filters.
+    assert all(call["doc_ids"] == allowed for call in calls)

@@ -1,52 +1,108 @@
 "use client";
 
+import { usePathname, useRouter } from "next/navigation";
+import { useEffect, useState } from "react";
+import { Menu } from "lucide-react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { loginUrl } from "@/lib/redirect";
+import { Button } from "@/components/ui/button";
+import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
+import { Skeleton } from "@/components/ui/skeleton";
+import { AppSidebar, BrandMark } from "./app-shell/AppSidebar";
+import { useAuth } from "./AuthProvider";
 import { useLocale } from "./Providers";
 
-export function Shell({ children }: { children: React.ReactNode }) {
-  const { t, locale, setLocale } = useLocale();
-  const pathname = usePathname();
+const COLLAPSED_KEY = "ocr-rag-sidebar-collapsed";
 
-  if (pathname.startsWith("/chat")) {
-    return <>{children}</>;
+export function Shell({ children }: { children: React.ReactNode }) {
+  const { t } = useLocale();
+  const { status } = useAuth();
+  const pathname = usePathname();
+  const router = useRouter();
+  const isLogin = pathname === "/login";
+  const [collapsed, setCollapsed] = useState(false);
+  const [mobileOpen, setMobileOpen] = useState(false);
+
+  // UX only: the API rejects every request without a session regardless.
+  useEffect(() => {
+    if (status === "anonymous" && !isLogin) {
+      router.replace(loginUrl(pathname, window.location.search));
+    }
+  }, [status, isLogin, pathname, router]);
+
+  useEffect(() => {
+    try {
+      setCollapsed(localStorage.getItem(COLLAPSED_KEY) === "true");
+    } catch {
+      /* storage unavailable */
+    }
+  }, []);
+
+  // Close the mobile drawer on navigation.
+  useEffect(() => setMobileOpen(false), [pathname]);
+
+  function toggleCollapsed() {
+    setCollapsed((current) => {
+      try { localStorage.setItem(COLLAPSED_KEY, String(!current)); } catch {}
+      return !current;
+    });
   }
 
+  if (isLogin) return <>{children}</>;
+  if (status !== "authenticated") return <ShellSkeleton />;
+
   return (
-    <div className="min-h-screen">
-      <header
-        className="sticky top-0 z-20 border-b backdrop-blur"
-        style={{ borderColor: "var(--border)", background: "var(--bg)" }}
+    <div className="flex h-dvh overflow-hidden bg-background">
+      <aside
+        className={`hidden shrink-0 border-e bg-sidebar transition-[width] duration-200 lg:block ${
+          collapsed ? "w-[60px]" : "w-64"
+        }`}
       >
-        {/* ps/pe and ms/me are logical properties: they flip automatically in RTL. */}
-        <nav className="mx-auto flex max-w-6xl items-center gap-6 px-4 py-3">
-          <Link href="/" className="font-semibold">
-            {t("appName")}
-          </Link>
-          <Link href="/" className="text-sm opacity-80 hover:opacity-100">
-            {t("library")}
-          </Link>
-          <Link href="/upload" className="text-sm opacity-80 hover:opacity-100">
-            {t("upload")}
-          </Link>
-          <Link href="/chat" className="text-sm opacity-80 hover:opacity-100">
-            {t("chat")}
-          </Link>
-          <Link href="/settings" className="text-sm opacity-80 hover:opacity-100">
-            {t("settings")}
-          </Link>
+        <AppSidebar collapsed={collapsed} onToggleCollapsed={toggleCollapsed} />
+      </aside>
 
-          <button
-            onClick={() => setLocale(locale === "ar" ? "en" : "ar")}
-            className="ms-auto rounded-md border px-3 py-1 text-sm"
-            style={{ borderColor: "var(--border)" }}
-          >
-            {locale === "ar" ? "English" : "العربية"}
-          </button>
-        </nav>
-      </header>
+      <Sheet open={mobileOpen} onOpenChange={setMobileOpen}>
+        <SheetContent>
+          <SheetTitle className="sr-only">{t("appNavigation")}</SheetTitle>
+          <AppSidebar onNavigate={() => setMobileOpen(false)} />
+        </SheetContent>
+      </Sheet>
 
-      <main className="mx-auto max-w-6xl px-4 py-6">{children}</main>
+      <div className="flex min-w-0 flex-1 flex-col">
+        <header className="flex h-14 shrink-0 items-center gap-2 border-b px-3 lg:hidden">
+          <Button variant="ghost" size="icon" onClick={() => setMobileOpen(true)} aria-label={t("openMenu")}>
+            <Menu />
+          </Button>
+          <Link href="/" className="flex items-center gap-2">
+            <BrandMark className="size-7" />
+            <span className="text-sm font-semibold tracking-tight">{t("appName")}</span>
+          </Link>
+        </header>
+        <main id="main" className="min-h-0 flex-1 overflow-y-auto">
+          {children}
+        </main>
+      </div>
+    </div>
+  );
+}
+
+function ShellSkeleton() {
+  return (
+    <div className="flex h-dvh bg-background" aria-busy="true">
+      <div className="hidden w-64 shrink-0 space-y-3 border-e bg-sidebar p-3 lg:block">
+        <Skeleton className="h-8 w-40" />
+        <Skeleton className="h-9 w-full" />
+        <div className="space-y-2 pt-2">
+          {Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-8 w-full" />)}
+        </div>
+      </div>
+      <div className="flex-1 space-y-4 p-8">
+        <Skeleton className="h-8 w-48" />
+        <Skeleton className="h-4 w-72" />
+        <div className="grid gap-4 pt-4 sm:grid-cols-2 lg:grid-cols-3">
+          {Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} className="h-36 w-full rounded-xl" />)}
+        </div>
+      </div>
     </div>
   );
 }
