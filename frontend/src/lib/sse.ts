@@ -1,4 +1,6 @@
-import { API_BASE, ChatMode, ResearchMode, authHeaders, notifyUnauthorized } from "./api";
+import {
+  API_BASE, ChatMode, ResearchMode, ThinkingMode, authHeaders, notifyUnauthorized,
+} from "./api";
 
 /**
  * Subscribe to a document's lifecycle + OCR progress stream.
@@ -39,6 +41,10 @@ export interface StreamHandlers {
   onToken?: (t: string) => void;
   /** The text streamed so far was a tool-calling turn, not the answer: clear it. */
   onReset?: () => void;
+  /** Model reasoning (or deep-think working notes), streamed separately from the answer. */
+  onThinking?: (t: string) => void;
+  /** Deep think / deep research progress. */
+  onPhase?: (phase: PhaseEvent) => void;
   onToolStart?: (name: string, args: unknown, phase?: string) => void;
   onToolEnd?: (name: string, hits: number) => void;
   onDone?: (payload: any) => void;
@@ -51,11 +57,28 @@ export interface StreamHandlers {
  * Native EventSource cannot POST, so this parses the SSE frames off a fetch
  * ReadableStream by hand.
  */
+export interface PhaseEvent {
+  phase: string;
+  detail?: string;
+  index?: number;
+  total?: number;
+  steps?: string[];
+  answered?: number;
+  sources?: number;
+  queries?: number;
+}
+
+export interface TurnOptions {
+  researchMode: ResearchMode;
+  chatMode: ChatMode;
+  thinking: ThinkingMode;
+  attachmentIds: string[];
+}
+
 export async function streamChat(
   conversationId: string,
   content: string,
-  researchMode: ResearchMode,
-  chatMode: ChatMode,
+  options: TurnOptions,
   handlers: StreamHandlers,
   signal?: AbortSignal,
 ): Promise<void> {
@@ -67,7 +90,13 @@ export async function streamChat(
         "Content-Type": "application/json",
         ...(await authHeaders("POST", forceCsrf)),
       },
-      body: JSON.stringify({ content, research_mode: researchMode, chat_mode: chatMode }),
+      body: JSON.stringify({
+        content,
+        research_mode: options.researchMode,
+        chat_mode: options.chatMode,
+        thinking: options.thinking,
+        attachment_ids: options.attachmentIds,
+      }),
       signal,
     });
 
@@ -124,6 +153,8 @@ export async function streamChat(
       switch (event) {
         case "token": handlers.onToken?.(payload.t); break;
         case "reset": handlers.onReset?.(); break;
+        case "thinking": handlers.onThinking?.(payload.t); break;
+        case "phase": handlers.onPhase?.(payload); break;
         case "tool_start": handlers.onToolStart?.(payload.name, payload.args, payload.phase); break;
         case "tool_end": handlers.onToolEnd?.(payload.name, payload.hits); break;
         case "done": handlers.onDone?.(payload); break;

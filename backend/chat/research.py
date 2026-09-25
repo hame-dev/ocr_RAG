@@ -65,3 +65,16 @@ def research_profile(mode: str) -> ResearchProfile:
 
 def normalize_chat_mode(value: object) -> ChatMode | None:
     return value if isinstance(value, str) and value in CHAT_MODES else None
+
+
+# General-mode reasoning effort, chosen per message like the research depth.
+#   instant  plain answer, no model thinking
+#   think    the model's built-in thinking, streamed to the UI
+#   deep     plan → work through sub-questions → review → write (deep_think.py)
+ThinkingMode = Literal["instant", "think", "deep"]
+DEFAULT_THINKING: ThinkingMode = "instant"
+THINKING_MODES: tuple[ThinkingMode, ...] = ("instant", "think", "deep")
+
+
+def normalize_thinking(value: object) -> ThinkingMode | None:
+    return value if isinstance(value, str) and value in THINKING_MODES else None

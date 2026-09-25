@@ -2,6 +2,7 @@ from django.urls import include, path
 from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView
 from rest_framework.routers import DefaultRouter
 
+from chat import attachments as chat_attachments
 from chat import sse_views as chat_sse
 from chat import views as chat_views
 from common import health
@@ -24,6 +25,11 @@ urlpatterns = [
     # fallback at the same `events/` path, and Django resolves first match.
     path("api/documents/<uuid:document_id>/events/", doc_sse.document_events),
     path("api/conversations/<uuid:conversation_id>/stream/", chat_sse.chat_stream),
+
+    # --- Chat attachments (General mode) ------------------------------------
+    path("api/chat/attachments/", chat_attachments.upload_attachment),
+    path("api/chat/attachments/<uuid:attachment_id>/", chat_attachments.delete_attachment),
+    path("api/chat/attachments/<uuid:attachment_id>/preview/", chat_attachments.attachment_preview),
 
     # --- Auth. Session cookie + CSRF; accounts are operator-created. -------
     path("api/auth/", include("accounts.urls")),

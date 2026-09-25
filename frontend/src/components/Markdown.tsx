@@ -2,7 +2,10 @@
 
 import { Children, isValidElement, memo } from "react";
 import ReactMarkdown from "react-markdown";
+import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
+import remarkMath from "remark-math";
+import "katex/dist/katex.min.css";
 import { MermaidDiagram } from "./MermaidDiagram";
 
 interface Props {
@@ -25,7 +28,10 @@ export const Markdown = memo(function Markdown({ children, onAccent }: Props) {
   return (
     <div className={`md text-sm${onAccent ? " md-on-accent" : ""}`} dir="auto">
       <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
+        // Thinking models write maths as LaTeX ($x \times y$, $$…$$); render it
+        // rather than showing the raw markup.
+        remarkPlugins={[remarkGfm, remarkMath]}
+        rehypePlugins={[[rehypeKatex, { throwOnError: false, strict: "ignore" }]]}
         components={{
           // Links out of a chat answer are untrusted; never hand the opener a
           // live window reference.

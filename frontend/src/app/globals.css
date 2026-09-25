@@ -281,4 +281,36 @@
   /* Keep the fade (it aids comprehension), drop the movement. */
   .animate-message-in { animation: fade-in 200ms ease-out both; }
   .animate-typing-dot { animation: pulse 1.2s ease-in-out infinite; }
+  .animate-shimmer { animation: none; }
+  .disclosure { transition: none !important; }
 }
+
+/* Text with a light band sweeping across it ("Thinking…"). */
+.shimmer-text {
+  background: linear-gradient(
+    90deg,
+    hsl(var(--muted-foreground)) 0%,
+    hsl(var(--muted-foreground)) 40%,
+    hsl(var(--foreground)) 50%,
+    hsl(var(--muted-foreground)) 60%,
+    hsl(var(--muted-foreground)) 100%
+  );
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+/* Expand/collapse via grid rows: animates to the content's natural height
+   without measuring it. The one sanctioned height animation (an accordion). */
+.disclosure {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows 200ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+.disclosure[data-open="true"] { grid-template-rows: 1fr; }
+.disclosure > * { overflow: hidden; min-height: 0; }
+
+/* KaTeX: math is always LTR, and wide display equations scroll instead of overflowing. */
+.md .katex { direction: ltr; unicode-bidi: isolate; font-size: 1.05em; }
+.md .katex-display { overflow-x: auto; overflow-y: hidden; padding-block: 0.25em; }

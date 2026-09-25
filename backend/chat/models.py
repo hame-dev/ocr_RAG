@@ -70,7 +70,45 @@ class Message(models.Model):
     # True when the client disconnected mid-stream; the partial answer is kept
     # rather than thrown away.
     is_partial = models.BooleanField(default=False)
+    # The model's thinking ("Think" / "Deep think"), shown collapsed in the UI.
+    reasoning = models.TextField(blank=True)
+    thinking_ms = models.IntegerField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         ordering = ["seq"]
+
+
+class ChatAttachment(models.Model):
+    """A file or image attached to a General-mode chat message.
+
+    Uploaded first (unbound), then bound to the conversation and the user
+    message it was sent with. Its extracted text and page images become part of
+    that message, so the whole conversation can keep referring to it.
+    """
+
+    KINDS = [("image", "Image"), ("pdf", "PDF"), ("text", "Text")]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    owner = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="chat_attachments"
+    )
+    conversation = models.ForeignKey(
+        Conversation, null=True, blank=True, on_delete=models.CASCADE, related_name="attachments"
+    )
+    message = models.ForeignKey(
+        Message, null=True, blank=True, on_delete=models.SET_NULL, related_name="attachments"
+    )
+    kind = models.CharField(max_length=8, choices=KINDS)
+    filename = models.CharField(max_length=255)
+    mime = models.CharField(max_length=128)
+    size = models.BigIntegerField(default=0)
+    storage_path = models.CharField(max_length=1024)
+    extracted_text = models.TextField(blank=True)
+    # JPEGs sent to the vision model: the image itself, or a scanned PDF's pages.
+    page_images = models.JSONField(default=list, blank=True)
+    page_count = models.IntegerField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        ordering = ["created_at"]

@@ -44,6 +44,11 @@ const config: Config = {
           from: { opacity: "0", transform: "translateY(6px)" },
           to: { opacity: "1", transform: "translateY(0)" },
         },
+        // Light sweeping across "Thinking…" while the model reasons.
+        shimmer: {
+          from: { backgroundPosition: "200% 0" },
+          to: { backgroundPosition: "-200% 0" },
+        },
         "typing-dot": {
           "0%, 80%, 100%": { opacity: "0.3", transform: "translateY(0)" },
           "40%": { opacity: "1", transform: "translateY(-2px)" },
@@ -53,6 +58,7 @@ const config: Config = {
         "fade-in": "fade-in 200ms cubic-bezier(0.23, 1, 0.32, 1)",
         "message-in": "message-in 220ms cubic-bezier(0.23, 1, 0.32, 1) both",
         "typing-dot": "typing-dot 1.2s ease-in-out infinite",
+        shimmer: "shimmer 2.2s linear infinite",
       },
     },
   },

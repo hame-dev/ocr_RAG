@@ -207,6 +207,24 @@ export interface Citation {
 
 export type ResearchMode = "fast" | "balanced" | "deep";
 export type ChatMode = "documents" | "general";
+export type ThinkingMode = "instant" | "think" | "deep";
+
+export interface ChatAttachment {
+  id: string;
+  filename: string;
+  kind: "image" | "pdf" | "text";
+  size: number;
+  pages: number | null;
+  has_preview: boolean;
+  preview_url: string | null;
+}
+
+/** What a finished deep-think / deep-research run did, stored with the answer. */
+export interface PhaseSummary {
+  steps: string[];
+  queries: string[];
+  sources: number | null;
+}
 
 export interface SelectedDocument {
   id: string;
@@ -232,6 +250,12 @@ export interface ConversationMessage {
   citations: Citation[];
   citation_mode: string;
   chat_mode: ChatMode;
+  thinking: ThinkingMode;
+  reasoning: string;
+  thinking_ms: number | null;
+  follow_ups: string[];
+  phases: PhaseSummary | null;
+  attachments: ChatAttachment[];
   is_partial: boolean;
   error: string;
 }
@@ -373,3 +397,46 @@ export const updateConversationScope = (
 
 export const pageImageUrl = (documentId: string, page: number, profile = "neural") =>
   `${API_BASE}/api/documents/${documentId}/pages/${page}/image/?profile=${profile}`;
+
+// ---- Chat attachments ---------------------------------------------------------
+
+/**
+ * Upload one file for the chat. XHR rather than fetch, because fetch cannot
+ * report upload progress.
+ */
+export async function uploadAttachment(
+  file: File,
+  onProgress?: (fraction: number) => void,
+  signal?: AbortSignal,
+): Promise<ChatAttachment> {
+  const headers = await authHeaders("POST");
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", `${API_BASE}/api/chat/attachments/`);
+    xhr.withCredentials = true;
+    for (const [name, value] of Object.entries(headers)) xhr.setRequestHeader(name, value);
+    xhr.upload.onprogress = (event) => {
+      if (event.lengthComputable) onProgress?.(event.loaded / event.total);
+    };
+    xhr.onload = () => {
+      let body: unknown = null;
+      try { body = JSON.parse(xhr.responseText); } catch { /* non-JSON */ }
+      if (xhr.status >= 200 && xhr.status < 300) return resolve(body as ChatAttachment);
+      if (xhr.status === 401) notifyUnauthorized();
+      const detail = (body as { detail?: string } | null)?.detail ?? xhr.statusText;
+      reject(new ApiError(xhr.status, detail, body));
+    };
+    xhr.onerror = () => reject(new ApiError(0, "network error"));
+    xhr.onabort = () => reject(new ApiError(0, "aborted"));
+    signal?.addEventListener("abort", () => xhr.abort());
+    const form = new FormData();
+    form.append("file", file);
+    xhr.send(form);
+  });
+}
+
+export const deleteAttachment = (id: string) =>
+  api<void>(`/api/chat/attachments/${id}/`, { method: "DELETE" });
+
+export const attachmentPreviewUrl = (attachment: ChatAttachment) =>
+  attachment.preview_url ? `${API_BASE}${attachment.preview_url}` : null;

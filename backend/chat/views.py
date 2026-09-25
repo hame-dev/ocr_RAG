@@ -4,6 +4,7 @@ from rest_framework import serializers, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
 
+from chat.attachments import serialize as serialize_attachment
 from chat.models import Conversation, Message
 from chat.research import DEFAULT_CHAT_MODE
 from common.ownership import CHAT_READY_STATUSES, owned_documents
@@ -11,16 +12,33 @@ from common.ownership import CHAT_READY_STATUSES, owned_documents
 
 class MessageSerializer(serializers.ModelSerializer):
     chat_mode = serializers.SerializerMethodField()
+    thinking = serializers.SerializerMethodField()
+    follow_ups = serializers.SerializerMethodField()
+    phases = serializers.SerializerMethodField()
+    attachments = serializers.SerializerMethodField()
 
     class Meta:
         model = Message
         fields = [
             "seq", "role", "content", "tool_calls", "citations", "citation_mode",
-            "chat_mode", "latency_ms", "model_id", "is_partial", "error", "created_at",
+            "chat_mode", "thinking", "reasoning", "thinking_ms", "follow_ups", "phases",
+            "attachments", "latency_ms", "model_id", "is_partial", "error", "created_at",
         ]
 
     def get_chat_mode(self, obj) -> str:
         return (obj.usage or {}).get("chat_mode", DEFAULT_CHAT_MODE)
+
+    def get_thinking(self, obj) -> str:
+        return (obj.usage or {}).get("thinking", "instant")
+
+    def get_follow_ups(self, obj) -> list[str]:
+        return (obj.usage or {}).get("follow_ups") or []
+
+    def get_phases(self, obj) -> dict | None:
+        return (obj.usage or {}).get("phases")
+
+    def get_attachments(self, obj) -> list[dict]:
+        return [serialize_attachment(a) for a in obj.attachments.all()]
 
 
 class ConversationSerializer(serializers.ModelSerializer):
@@ -99,7 +117,7 @@ class ConversationDetailSerializer(ConversationSerializer):
 
 
 class ConversationViewSet(viewsets.ModelViewSet):
-    queryset = Conversation.objects.prefetch_related("messages").all()
+    queryset = Conversation.objects.prefetch_related("messages__attachments").all()
 
     def get_queryset(self):
         return super().get_queryset().filter(owner=self.request.user)

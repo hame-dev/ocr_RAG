@@ -1,6 +1,8 @@
 """The ReAct agent.
 
     START -> prepare -> agent <-> tools -> finalize -> END
+                     +-> deep_think ------------+      (General, "Deep think")
+                     +-> deep_research ---------+      (Documents, "Deep research")
 
 `prepare` bounds the context window before every turn. On a 32GB machine that is
 a stability requirement, not an optimization: an unbounded message list will
@@ -24,6 +26,9 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode, tools_condition
 
+from chat.deep_research import deep_research
+from chat.deep_think import deep_think
+from chat.pipeline import text_of
 from chat.research import DEFAULT_RESEARCH_MODE, research_profile
 from chat.tools import TOOLS
 
@@ -37,7 +42,7 @@ The documents were scanned and read by OCR, so the text may contain small errors
 How to answer:
 - ALWAYS search the documents before answering a question about their contents. \
 Never answer from memory or from general knowledge.
-- Answer in the SAME LANGUAGE the user wrote in. If they ask in Arabic, answer in Arabic.
+- Answer in the language of the user's OWN message, never the language of a document, attachment or search result: an English question about an Arabic document gets an English answer, and an Arabic question gets an Arabic answer.
 - After each factual sentence drawn from a document, append a citation marker \
 in the form [[cite:<chunk_id>]], using a chunk_id you actually received from a tool.
 - NEVER cite a chunk_id that a tool did not return to you.
@@ -54,7 +59,7 @@ small table would communicate the answer more clearly.
 GENERAL_SYSTEM_PROMPT = """You are a helpful, knowledgeable assistant.
 
 How to answer:
-- Answer in the SAME LANGUAGE the user wrote in. If they ask in Arabic, answer in Arabic.
+- Answer in the language of the user's OWN message, never the language of a document, attachment or search result: an English question about an Arabic document gets an English answer, and an Arabic question gets an Arabic answer.
 - Answer from your general knowledge. Be accurate and concise, and say so when you are \
 unsure rather than guessing.
 - In this mode you have NO access to the user's document library. If the user asks about \
@@ -80,24 +85,73 @@ class AgentState(TypedDict):
     scope_note: str
     research_mode: str
     chat_mode: str
+    thinking: str
     tool_rounds: int
     retrieved: dict
     summary: str
+    follow_ups: list[str]
 
 
-def _llm(*, with_tools: bool = True):
+# Tag carried by every model call whose output IS the user-visible answer.
+# chat_stream streams only these tokens; planning/checking calls stay silent.
+FINAL_ANSWER_TAG = "final_answer"
+
+
+def _llm(
+    *,
+    with_tools: bool = True,
+    reasoning: bool = False,
+    json: bool = False,
+    final: bool = False,
+    max_tokens: int | None = None,
+):
+    """The chat model.
+
+    reasoning: qwen's thinking. langchain-ollama returns it separately in
+        additional_kwargs["reasoning_content"], so it never mixes into the
+        answer text (inline <think> blocks used to break citation parsing).
+    json: Ollama's JSON mode, for the pipelines' structured steps.
+    final: tag the call as producing the user-visible answer.
+    max_tokens: cap the generated length (Ollama num_predict).
+    """
     from langchain_ollama import ChatOllama
 
     model = ChatOllama(
         base_url=settings.OLLAMA_BASE_URL,
         model=settings.LLM_MODEL,
-        temperature=0.2,
+        temperature=0.1 if json else 0.2,
         num_ctx=settings.LLM_NUM_CTX,
-        # qwen3.5's thinking blocks leak into answers and break citation
-        # parsing, so reasoning stays off for this agent.
-        reasoning=False,
+        reasoning=reasoning,
+        **({"format": "json"} if json else {}),
+        **({"num_predict": max_tokens} if max_tokens else {}),
     )
-    return model.bind_tools(TOOLS) if with_tools else model
+    runnable = model.bind_tools(TOOLS) if with_tools else model
+    return runnable.with_config(tags=[FINAL_ANSWER_TAG]) if final else runnable
+
+
+HISTORY_TURNS = 6
+
+
+def history_context(state: AgentState) -> list:
+    """Earlier turns for the multi-step pipelines, without the current request.
+
+    Tool traffic is dropped (the pipelines call the model without tools bound),
+    but earlier user messages keep their attachments, so a file or image shared
+    earlier in the conversation stays visible to later turns.
+    """
+    messages = list(state["messages"])
+    for index in range(len(messages) - 1, -1, -1):
+        if messages[index].type == "human":
+            messages = messages[:index]
+            break
+    kept = [
+        m for m in messages
+        if m.type == "human" or (m.type == "ai" and not getattr(m, "tool_calls", None) and m.content)
+    ][-HISTORY_TURNS:]
+    context = []
+    if summary := state.get("summary"):
+        context.append(SystemMessage(content=f"Earlier in this conversation:\n{summary}"))
+    return context + kept
 
 
 async def prepare(state: AgentState) -> dict:
@@ -124,9 +178,9 @@ async def prepare(state: AgentState) -> dict:
                         "Keep document titles, figures and dates exactly."
                     ),
                     HumanMessage(
-                        content="\n".join(
-                            f"{m.type}: {getattr(m, 'content', '')}" for m in old
-                        )[:8000]
+                        # Text parts only: attachments put base64 images in
+                        # message content, which must never reach this prompt.
+                        content="\n".join(f"{m.type}: {text_of(m)}" for m in old)[:8000]
                     ),
                 ]
             )
@@ -149,19 +203,33 @@ async def agent(state: AgentState) -> dict:
         system += f"\n\nEarlier in this conversation:\n{summary}"
 
     messages = [SystemMessage(content=system)] + list(state["messages"])
-    response = await _llm().ainvoke(messages)
+    response = await _llm(final=True).ainvoke(messages)
     return {"messages": [response]}
 
 
 async def _general_answer(state: AgentState) -> dict:
-    """Plain LLM turn: no tools are bound, so _route always ends the turn."""
+    """Plain LLM turn: no tools are bound, so _route always ends the turn.
+
+    "Think" turns on the model's own reasoning; it streams to the UI as
+    `thinking` events and is kept out of the answer text.
+    """
     system = GENERAL_SYSTEM_PROMPT
     if summary := state.get("summary"):
         system += f"\n\nEarlier in this conversation:\n{summary}"
 
     messages = [SystemMessage(content=system)] + list(state["messages"])
-    response = await _llm(with_tools=False).ainvoke(messages)
+    thinking = state.get("thinking") == "think"
+    response = await _llm(with_tools=False, reasoning=thinking, final=True).ainvoke(messages)
     return {"messages": [response]}
+
+
+def _select_path(state: AgentState) -> str:
+    """Which pipeline answers this turn."""
+    if state.get("chat_mode") == "general":
+        return "deep_think" if state.get("thinking") == "deep" else "agent"
+    if state.get("research_mode") == "deep":
+        return "deep_research"
+    return "agent"
 
 
 def _route(state: AgentState) -> str:
@@ -192,7 +260,7 @@ async def force_answer(state: AgentState) -> dict:
     history = list(state["messages"])
     if history and getattr(history[-1], "tool_calls", None):
         history = history[:-1]
-    response = await _llm(with_tools=False).ainvoke(
+    response = await _llm(with_tools=False, final=True).ainvoke(
         [SystemMessage(content=system)] + history
     )
     return {"messages": [response]}
@@ -233,10 +301,18 @@ def build_graph(checkpointer=None):
     graph.add_node("tools", ToolNode(TOOLS, handle_tool_errors=True))
     graph.add_node("collect", collect)
     graph.add_node("force_answer", force_answer)
+    graph.add_node("deep_think", deep_think)
+    graph.add_node("deep_research", deep_research)
     graph.add_node("finalize", finalize)
 
     graph.add_edge(START, "prepare")
-    graph.add_edge("prepare", "agent")
+    graph.add_conditional_edges(
+        "prepare",
+        _select_path,
+        {"agent": "agent", "deep_think": "deep_think", "deep_research": "deep_research"},
+    )
+    graph.add_edge("deep_think", "finalize")
+    graph.add_edge("deep_research", "finalize")
     graph.add_conditional_edges(
         "agent",
         _route,

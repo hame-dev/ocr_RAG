@@ -45,9 +45,10 @@ def _events(raw: str) -> dict[str, dict]:
 
 
 def _fake_llm(calls: list[bool], reply: str = "Paris."):
-    def factory(*, with_tools: bool = True):
+    def factory(*, with_tools: bool = True, final: bool = False, **_):
         calls.append(with_tools)
-        return GenericFakeChatModel(messages=iter([AIMessage(content=reply)]))
+        model = GenericFakeChatModel(messages=iter([AIMessage(content=reply)]))
+        return model.with_config(tags=[chat_graph.FINAL_ANSWER_TAG]) if final else model
 
     return factory
 
@@ -69,7 +70,7 @@ async def test_general_mode_uses_the_plain_llm_without_tools(monkeypatch):
             seen_prompts.append(messages[0].content)
             return await super().ainvoke(messages, *args, **kwargs)
 
-    def factory(*, with_tools: bool = True):
+    def factory(*, with_tools: bool = True, **_):
         calls.append(with_tools)
         return RecordingModel(messages=iter([AIMessage(content="Paris.")]))
 
@@ -175,7 +176,10 @@ class _ScriptedGraph:
 def _model_event(kind, *, content="", tool_calls=None):
     from langchain_core.messages import AIMessageChunk
 
-    event = {"event": kind, "name": "ChatOllama", "metadata": {"langgraph_node": "agent"}, "data": {}}
+    event = {
+        "event": kind, "name": "ChatOllama", "metadata": {"langgraph_node": "agent"},
+        "tags": [chat_graph.FINAL_ANSWER_TAG], "data": {},
+    }
     if kind == "on_chat_model_stream":
         event["data"]["chunk"] = AIMessageChunk(content=content)
     elif kind == "on_chat_model_end":

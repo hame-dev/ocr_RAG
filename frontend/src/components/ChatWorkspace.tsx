@@ -4,21 +4,24 @@ import { memo, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { usePathname } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  AlertCircle, BookOpenText, Check, Copy, FileText, Library, RotateCw, Sparkles,
+  AlertCircle, ArrowUpRight, BookOpenText, Check, Copy, FileText, Library, RotateCw, Sparkles,
 } from "lucide-react";
 import {
-  API_BASE, ChatMode, Citation, ConversationDetail, ResearchMode, SelectedDocument, api,
-  createConversation, updateConversationScope,
+  API_BASE, ChatAttachment, ChatMode, Citation, ConversationDetail, PhaseSummary, ResearchMode,
+  SelectedDocument, ThinkingMode, api, createConversation, updateConversationScope,
 } from "@/lib/api";
 import { fmt, num, StringKey } from "@/lib/i18n";
-import { streamChat } from "@/lib/sse";
+import { PhaseEvent, streamChat } from "@/lib/sse";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger, Hint } from "@/components/ui/tooltip";
 import { BrandMark } from "./app-shell/AppSidebar";
-import { ChatComposer } from "./ChatComposer";
+import { AttachmentList } from "./chat/AttachmentList";
+import { ResearchProgress } from "./chat/ResearchProgress";
+import { ThinkingPanel } from "./chat/ThinkingPanel";
+import { ChatComposer, OutgoingTurn } from "./ChatComposer";
 import { Markdown } from "./Markdown";
 import { useLocale } from "./Providers";
 
@@ -32,12 +35,26 @@ interface DisplayMessage {
   error?: string;
   /** Sent in this session (not loaded from history): plays the entrance. */
   fresh?: boolean;
+  attachments?: ChatAttachment[];
+  thinking?: ThinkingMode;
+  reasoning?: string;
+  thinkingMs?: number | null;
+  /** When the first reasoning arrived (drives the live "Thinking… 12s" timer). */
+  thinkingStartedAt?: number | null;
+  /** When the answer started, i.e. thinking ended (until the server's exact figure arrives). */
+  thinkingEndedAt?: number | null;
+  /** Live deep think / deep research progress for the streaming message. */
+  phases?: PhaseEvent[];
+  phaseSummary?: PhaseSummary | null;
+  followUps?: string[];
 }
 
 interface Turn {
   content: string;
   researchMode: ResearchMode;
   chatMode: ChatMode;
+  thinking: ThinkingMode;
+  attachmentIds: string[];
 }
 
 const SUGGESTIONS: Record<ChatMode, StringKey[]> = {
@@ -128,6 +145,12 @@ export function ChatWorkspace({ conversationId }: { conversationId?: string }) {
           citationMode: message.citation_mode,
           chatMode: message.chat_mode,
           error: message.error || undefined,
+          attachments: message.attachments,
+          thinking: message.thinking,
+          reasoning: message.reasoning,
+          thinkingMs: message.thinking_ms,
+          phaseSummary: message.phases,
+          followUps: message.follow_ups,
         })),
     );
     setSelectedSources(conversation.selected_documents ?? []);
@@ -166,27 +189,37 @@ export function ChatWorkspace({ conversationId }: { conversationId?: string }) {
   }
 
   /** Optimistically show the question and a pending answer. */
-  function appendTurn(content: string, chatMode: ChatMode) {
+  function appendTurn(content: string, turn: Pick<Turn, "chatMode" | "thinking">, attachments: ChatAttachment[] = []) {
     // Remember where the composer is, so it can glide to the dock (FLIP).
     dockTopRef.current = dockRef.current?.getBoundingClientRect().top ?? null;
     pinnedRef.current = true;
     setMessages((current) => [
       ...current,
-      { role: "user", content, chatMode, fresh: true },
-      { role: "assistant", content: "", pending: true, chatMode, fresh: true },
+      { role: "user", content, chatMode: turn.chatMode, attachments, fresh: true },
+      {
+        role: "assistant", content: "", pending: true, chatMode: turn.chatMode,
+        thinking: turn.thinking, reasoning: "", phases: [], fresh: true,
+      },
     ]);
   }
 
-  async function submit(content: string, researchMode: ResearchMode, chatMode: ChatMode) {
+  async function submit(content: string, outgoing: OutgoingTurn) {
     if (streaming) return;
     setSourceError(null);
+    const turn: Turn = {
+      content,
+      researchMode: outgoing.researchMode,
+      chatMode: outgoing.chatMode,
+      thinking: outgoing.thinking,
+      attachmentIds: outgoing.attachments.map((a) => a.id),
+    };
     if (activeId) {
-      appendTurn(content, chatMode);
-      await streamTurn(activeId, { content, researchMode, chatMode });
+      appendTurn(content, turn, outgoing.attachments);
+      await streamTurn(activeId, turn);
       return;
     }
 
-    appendTurn(content, chatMode);
+    appendTurn(content, turn, outgoing.attachments);
     setStreaming(true);
     let created: ConversationDetail;
     try {
@@ -207,7 +240,18 @@ export function ChatWorkspace({ conversationId }: { conversationId?: string }) {
     setCreatedId(created.id);
     window.history.pushState(null, "", `/chat/${created.id}`);
     void queryClient.invalidateQueries({ queryKey: ["conversations"] });
-    await streamTurn(created.id, { content, researchMode, chatMode });
+    await streamTurn(created.id, turn);
+  }
+
+  /** Follow-up chips: ask with the same settings as the turn that suggested them. */
+  function askFollowUp(question: string) {
+    const last = lastTurnRef.current;
+    void submit(question, {
+      researchMode: last?.researchMode ?? "deep",
+      chatMode: last?.chatMode ?? "documents",
+      thinking: last?.thinking ?? "instant",
+      attachments: [],
+    });
   }
 
   function updateLast(update: (message: DisplayMessage) => DisplayMessage) {
@@ -219,24 +263,39 @@ export function ChatWorkspace({ conversationId }: { conversationId?: string }) {
   }
 
   async function streamTurn(id: string, turn: Turn) {
-    lastTurnRef.current = turn;
+    // A retry must not re-send attachments: they are already in the thread.
+    lastTurnRef.current = { ...turn, attachmentIds: [] };
     const controller = new AbortController();
     abortRef.current = controller;
     setStreaming(true);
     setToolPhase(null);
 
-    // Tokens arrive ~30/s; render at most once per frame instead of per token.
+    // Tokens (answer and reasoning) arrive ~30/s; render at most once per
+    // frame instead of per token.
     let buffered = "";
+    let bufferedThought = "";
     let frame = 0;
     const flush = () => {
       frame = 0;
-      if (!buffered) return;
+      if (!buffered && !bufferedThought) return;
       const chunk = buffered;
+      const thought = bufferedThought;
       buffered = "";
-      updateLast((last) => ({ ...last, content: last.content + chunk }));
+      bufferedThought = "";
+      updateLast((last) => ({
+        ...last,
+        content: last.content + chunk,
+        reasoning: (last.reasoning ?? "") + thought,
+        thinkingStartedAt: last.thinkingStartedAt ?? (thought ? Date.now() : null),
+        thinkingEndedAt: last.thinkingEndedAt ?? (chunk && last.thinkingStartedAt ? Date.now() : null),
+      }));
+    };
+    const schedule = () => {
+      if (!frame) frame = requestAnimationFrame(flush);
     };
     const dropBuffer = () => {
       buffered = "";
+      bufferedThought = "";
       if (frame) cancelAnimationFrame(frame);
       frame = 0;
     };
@@ -248,11 +307,16 @@ export function ChatWorkspace({ conversationId }: { conversationId?: string }) {
     };
 
     try {
-      await streamChat(id, turn.content, turn.researchMode, turn.chatMode, {
+      await streamChat(id, turn.content, turn, {
         onToken: (token) => {
           buffered += token;
-          if (!frame) frame = requestAnimationFrame(flush);
+          schedule();
         },
+        onThinking: (thought) => {
+          bufferedThought += thought;
+          schedule();
+        },
+        onPhase: (phase) => updateLast((last) => ({ ...last, phases: [...(last.phases ?? []), phase] })),
         // The streamed text was a tool-calling turn ("let me search…"): drop it.
         onReset: () => {
           dropBuffer();
@@ -268,6 +332,10 @@ export function ChatWorkspace({ conversationId }: { conversationId?: string }) {
             content: payload.content,
             citations: payload.citations,
             citationMode: payload.citation_mode,
+            reasoning: payload.reasoning ?? last.reasoning,
+            thinkingMs: payload.thinking_ms,
+            phaseSummary: payload.phases,
+            followUps: payload.follow_ups ?? [],
             pending: false,
           }));
         },
@@ -296,13 +364,15 @@ export function ChatWorkspace({ conversationId }: { conversationId?: string }) {
     // Prefer the exact settings of the turn that failed in this session; for a
     // failure loaded from history, fall back to the last question as asked.
     const lastUser = [...messages].reverse().find((message) => message.role === "user");
-    const turn = lastTurnRef.current ?? (lastUser && {
+    const turn: Turn | undefined = lastTurnRef.current ?? (lastUser && {
       content: lastUser.content,
       researchMode: "balanced" as ResearchMode,
       chatMode: lastUser.chatMode ?? composerMode,
+      thinking: "instant" as ThinkingMode,
+      attachmentIds: [],
     });
     if (!turn) return;
-    appendTurn(turn.content, turn.chatMode);
+    appendTurn(turn.content, turn);
     void streamTurn(activeId, turn);
   }
 
@@ -373,13 +443,19 @@ export function ChatWorkspace({ conversationId }: { conversationId?: string }) {
               <div className="mx-auto w-full max-w-3xl space-y-8 px-4 py-8 sm:px-6">
                 {messages.map((message, index) =>
                   message.role === "user" ? (
-                    <UserMessage key={index} content={message.content} fresh={message.fresh} />
+                    <UserMessage
+                      key={index}
+                      content={message.content}
+                      attachments={message.attachments}
+                      fresh={message.fresh}
+                    />
                   ) : (
                     <AssistantMessage
                       key={index}
                       message={message}
                       toolPhase={index === messages.length - 1 ? toolPhase : null}
                       onRetry={index === messages.length - 1 && !streaming ? retryLast : undefined}
+                      onFollowUp={index === messages.length - 1 && !streaming ? askFollowUp : undefined}
                     />
                   ),
                 )}
@@ -430,9 +506,16 @@ export function ChatWorkspace({ conversationId }: { conversationId?: string }) {
   );
 }
 
-const UserMessage = memo(function UserMessage({ content, fresh }: { content: string; fresh?: boolean }) {
+const UserMessage = memo(function UserMessage({
+  content, attachments, fresh,
+}: {
+  content: string;
+  attachments?: ChatAttachment[];
+  fresh?: boolean;
+}) {
   return (
-    <div className={cn("flex justify-end", fresh && "animate-message-in")}>
+    <div className={cn("flex flex-col items-end gap-2", fresh && "animate-message-in")}>
+      {attachments && attachments.length > 0 && <AttachmentList attachments={attachments} className="max-w-[85%]" />}
       <div className="max-w-[85%] rounded-2xl rounded-ee-md bg-muted px-4 py-2.5">
         <Markdown>{content}</Markdown>
       </div>
@@ -441,15 +524,18 @@ const UserMessage = memo(function UserMessage({ content, fresh }: { content: str
 });
 
 const AssistantMessage = memo(function AssistantMessage({
-  message, toolPhase, onRetry,
+  message, toolPhase, onRetry, onFollowUp,
 }: {
   message: DisplayMessage;
   toolPhase: string | null;
   onRetry?: () => void;
+  onFollowUp?: (question: string) => void;
 }) {
   const { t } = useLocale();
   const [copied, setCopied] = useState(false);
-  const waiting = message.pending && !message.content;
+  const hasPhases = Boolean(message.phases?.length || message.phaseSummary);
+  const thinkingLive = Boolean(message.pending && !message.content && message.reasoning);
+  const waiting = message.pending && !message.content && !message.reasoning && !message.phases?.length;
 
   return (
     <article className={cn("group flex gap-3", message.fresh && "animate-message-in")}>
@@ -458,6 +544,28 @@ const AssistantMessage = memo(function AssistantMessage({
         {message.chatMode === "general" && (
           <Badge variant="secondary" className="gap-1"><Sparkles /> {t("generalBadge")}</Badge>
         )}
+
+        {hasPhases && (
+          <ResearchProgress
+            phases={message.phases ?? []}
+            summary={message.phaseSummary}
+            live={Boolean(message.pending && !message.content)}
+          />
+        )}
+
+        {message.reasoning ? (
+          <ThinkingPanel
+            reasoning={message.reasoning}
+            live={thinkingLive}
+            thinkingMs={
+              message.thinkingMs
+              ?? (message.thinkingStartedAt && message.thinkingEndedAt
+                ? message.thinkingEndedAt - message.thinkingStartedAt
+                : null)
+            }
+            startedAt={message.thinkingStartedAt}
+          />
+        ) : null}
 
         {toolPhase ? (
           <div className="inline-flex items-center gap-2 rounded-full border bg-card px-3 py-1.5 text-xs text-muted-foreground">
@@ -516,6 +624,26 @@ const AssistantMessage = memo(function AssistantMessage({
                     <p className="doc-text text-xs" dir="auto">{citation.quote}</p>
                   </TooltipContent>
                 </Tooltip>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {onFollowUp && message.followUps && message.followUps.length > 0 && (
+          <div>
+            <p className="mb-2 text-xs font-medium text-muted-foreground">{t("followUps")}</p>
+            <div className="flex flex-col items-start gap-1.5">
+              {message.followUps.map((question) => (
+                <button
+                  key={question}
+                  type="button"
+                  onClick={() => onFollowUp(question)}
+                  className="group/fu flex max-w-full items-center gap-2 rounded-lg border bg-card px-3 py-1.5 text-start text-sm transition-colors hover:border-primary/40 hover:bg-accent"
+                  dir="auto"
+                >
+                  <span className="min-w-0">{question}</span>
+                  <ArrowUpRight className="size-3.5 shrink-0 text-muted-foreground transition-colors group-hover/fu:text-primary rtl:-scale-x-100" />
+                </button>
               ))}
             </div>
           </div>
