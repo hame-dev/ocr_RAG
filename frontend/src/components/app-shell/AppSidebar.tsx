@@ -6,7 +6,7 @@ import { usePathname } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import {
   ChevronsUpDown, FolderOpen, Languages, LogOut, MessagesSquare, Monitor, Moon,
-  PanelLeftClose, PanelLeftOpen, ScanText, Settings, SquarePen, Sun, Upload,
+  PanelLeftClose, PanelLeftOpen, Settings, SquarePen, Sun, Upload,
 } from "lucide-react";
 import { api, ConversationSummary } from "@/lib/api";
 import { StringKey } from "@/lib/i18n";
@@ -28,16 +28,21 @@ const NAV: { href: string; label: StringKey; icon: typeof FolderOpen; match: (p:
   { href: "/settings", label: "settings", icon: Settings, match: (p) => p.startsWith("/settings") },
 ];
 
+/**
+ * The logo mark. It sits on a white tile in both themes: the navy stroke of
+ * the logo would disappear against the dark background otherwise.
+ */
 export function BrandMark({ className }: { className?: string }) {
   return (
     <span
       className={cn(
-        "grid size-8 shrink-0 place-items-center rounded-lg bg-primary text-primary-foreground shadow-sm",
+        "grid size-8 shrink-0 place-items-center overflow-hidden rounded-lg bg-white p-[3px] shadow-sm ring-1 ring-black/5",
         className,
       )}
       aria-hidden
     >
-      <ScanText className="size-[18px]" />
+      {/* eslint-disable-next-line @next/next/no-img-element -- tiny static asset */}
+      <img src="/brand/logo-mark.png" alt="" className="size-full object-contain" draggable={false} />
     </span>
   );
 }

@@ -39,9 +39,20 @@ const config: Config = {
       },
       keyframes: {
         "fade-in": { from: { opacity: "0" }, to: { opacity: "1" } },
+        // A new chat message settles 6px into place; transform + opacity only.
+        "message-in": {
+          from: { opacity: "0", transform: "translateY(6px)" },
+          to: { opacity: "1", transform: "translateY(0)" },
+        },
+        "typing-dot": {
+          "0%, 80%, 100%": { opacity: "0.3", transform: "translateY(0)" },
+          "40%": { opacity: "1", transform: "translateY(-2px)" },
+        },
       },
       animation: {
-        "fade-in": "fade-in 200ms ease-out",
+        "fade-in": "fade-in 200ms cubic-bezier(0.23, 1, 0.32, 1)",
+        "message-in": "message-in 220ms cubic-bezier(0.23, 1, 0.32, 1) both",
+        "typing-dot": "typing-dot 1.2s ease-in-out infinite",
       },
     },
   },

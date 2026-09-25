@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
+import { memo, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { usePathname } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   AlertCircle, BookOpenText, Check, Copy, FileText, Library, RotateCw, Sparkles,
@@ -12,6 +12,7 @@ import {
 } from "@/lib/api";
 import { fmt, num, StringKey } from "@/lib/i18n";
 import { streamChat } from "@/lib/sse";
+import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -21,8 +22,6 @@ import { ChatComposer } from "./ChatComposer";
 import { Markdown } from "./Markdown";
 import { useLocale } from "./Providers";
 
-const pendingKey = (conversationId: string) => `ocr-rag-pending-chat:${conversationId}`;
-
 interface DisplayMessage {
   role: "user" | "assistant";
   content: string;
@@ -31,9 +30,11 @@ interface DisplayMessage {
   chatMode?: ChatMode;
   pending?: boolean;
   error?: string;
+  /** Sent in this session (not loaded from history): plays the entrance. */
+  fresh?: boolean;
 }
 
-interface PendingTurn {
+interface Turn {
   content: string;
   researchMode: ResearchMode;
   chatMode: ChatMode;
@@ -44,10 +45,21 @@ const SUGGESTIONS: Record<ChatMode, StringKey[]> = {
   general: ["suggestGen1", "suggestGen2", "suggestGen3"],
 };
 
+// Strong ease-in-out for on-screen movement (the composer travelling from the
+// centre of the empty state to the bottom dock).
+const EASE_IN_OUT = "cubic-bezier(0.77, 0, 0.175, 1)";
+
 export function ChatWorkspace({ conversationId }: { conversationId?: string }) {
   const { t } = useLocale();
-  const router = useRouter();
+  const pathname = usePathname();
   const queryClient = useQueryClient();
+
+  // A chat started from /chat is created *in place*: the URL is swapped with
+  // history.pushState instead of navigating, so nothing remounts, no route is
+  // fetched, and the question appears the instant Enter is pressed.
+  const [createdId, setCreatedId] = useState<string | null>(null);
+  const activeId = conversationId ?? createdId ?? undefined;
+
   const [messages, setMessages] = useState<DisplayMessage[]>([]);
   const [selectedSources, setSelectedSources] = useState<SelectedDocument[]>([]);
   const [streaming, setStreaming] = useState(false);
@@ -56,34 +68,56 @@ export function ChatWorkspace({ conversationId }: { conversationId?: string }) {
   const [composerMode, setComposerMode] = useState<ChatMode>("documents");
   const [draft, setDraft] = useState<{ text: string; nonce: number } | null>(null);
   const hydratedIdRef = useRef<string | null>(null);
-  const pendingStartedRef = useRef<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
-  const bottomRef = useRef<HTMLDivElement>(null);
+  const dockRef = useRef<HTMLDivElement>(null);
+  const dockTopRef = useRef<number | null>(null);
   const pinnedRef = useRef(true);
   const abortRef = useRef<AbortController | null>(null);
-  const lastTurnRef = useRef<PendingTurn | null>(null);
+  const lastTurnRef = useRef<Turn | null>(null);
 
   const conversationQuery = useQuery({
-    queryKey: ["conversation", conversationId],
-    queryFn: () => api<ConversationDetail>(`/api/conversations/${conversationId}/`),
-    enabled: Boolean(conversationId),
+    queryKey: ["conversation", activeId],
+    queryFn: () => api<ConversationDetail>(`/api/conversations/${activeId}/`),
+    enabled: Boolean(activeId),
   });
 
-  useEffect(() => {
+  function reset() {
+    abortRef.current?.abort();
     hydratedIdRef.current = null;
-    pendingStartedRef.current = null;
     setMessages([]);
     setSelectedSources([]);
     setToolPhase(null);
     setSourceError(null);
+  }
+
+  // A different conversation route: start clean.
+  useEffect(() => {
+    reset();
     return () => abortRef.current?.abort();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [conversationId]);
 
+  // "New chat" (or Back) after an in-place creation lands on /chat again
+  // without remounting this component, so clear it here. Only on a *change*
+  // to /chat: Next applies the pushState URL asynchronously, so right after
+  // creation there is a render where the path still reads /chat.
+  const previousPathRef = useRef(pathname);
+  useEffect(() => {
+    const previous = previousPathRef.current;
+    previousPathRef.current = pathname;
+    if (!conversationId && previous !== pathname && pathname === "/chat") {
+      reset();
+      setCreatedId(null);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pathname, conversationId]);
+
+  // Load history once per conversation. Never re-hydrate: a refetch (e.g. for
+  // the title) must not overwrite a transcript that is streaming.
   useEffect(() => {
     const conversation = conversationQuery.data;
-    if (!conversationId || !conversation || hydratedIdRef.current === conversationId) return;
-
-    hydratedIdRef.current = conversationId;
+    if (!activeId || !conversation || hydratedIdRef.current === activeId) return;
+    hydratedIdRef.current = activeId;
     setMessages(
       conversation.messages
         .filter((message) => message.role === "user" || message.role === "assistant")
@@ -97,28 +131,13 @@ export function ChatWorkspace({ conversationId }: { conversationId?: string }) {
         })),
     );
     setSelectedSources(conversation.selected_documents ?? []);
+  }, [activeId, conversationQuery.data]);
 
-    let stored: string | null = null;
-    try { stored = sessionStorage.getItem(pendingKey(conversationId)); } catch {}
-    if (!stored || pendingStartedRef.current === conversationId) return;
-    try { sessionStorage.removeItem(pendingKey(conversationId)); } catch {}
-    pendingStartedRef.current = conversationId;
-    try {
-      const pending = JSON.parse(stored) as PendingTurn;
-      const chatMode: ChatMode = pending.chatMode === "general" ? "general" : "documents";
-      if (pending.content && ["fast", "balanced", "deep"].includes(pending.researchMode)) {
-        void sendTurn(conversationId, pending.content, pending.researchMode, chatMode);
-      }
-    } catch {
-      setSourceError(t("pendingMessageFailed"));
-    }
-    // sendTurn reads only stable setters/refs; adding it here would re-run the
-    // one-time session handoff on every render.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [conversationId, conversationQuery.data, t]);
-
-  useEffect(() => {
-    if (pinnedRef.current) bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+  // Follow the stream. Instant and before paint: a smooth scroll restarted on
+  // every token is what made streaming stutter.
+  useLayoutEffect(() => {
+    const element = scrollRef.current;
+    if (element && pinnedRef.current) element.scrollTop = element.scrollHeight;
   }, [messages, toolPhase]);
 
   function onScroll() {
@@ -132,12 +151,12 @@ export function ChatWorkspace({ conversationId }: { conversationId?: string }) {
     const previous = selectedSources;
     setSelectedSources(next);
     setSourceError(null);
-    if (!conversationId) return;
+    if (!activeId) return;
     try {
-      const updated = await updateConversationScope(conversationId, next.map((document) => document.id));
+      const updated = await updateConversationScope(activeId, next.map((document) => document.id));
       setSelectedSources(updated.selected_documents ?? next);
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["conversation", conversationId] }),
+        queryClient.invalidateQueries({ queryKey: ["conversation", activeId] }),
         queryClient.invalidateQueries({ queryKey: ["conversations"] }),
       ]);
     } catch (error) {
@@ -146,28 +165,49 @@ export function ChatWorkspace({ conversationId }: { conversationId?: string }) {
     }
   }
 
+  /** Optimistically show the question and a pending answer. */
+  function appendTurn(content: string, chatMode: ChatMode) {
+    // Remember where the composer is, so it can glide to the dock (FLIP).
+    dockTopRef.current = dockRef.current?.getBoundingClientRect().top ?? null;
+    pinnedRef.current = true;
+    setMessages((current) => [
+      ...current,
+      { role: "user", content, chatMode, fresh: true },
+      { role: "assistant", content: "", pending: true, chatMode, fresh: true },
+    ]);
+  }
+
   async function submit(content: string, researchMode: ResearchMode, chatMode: ChatMode) {
+    if (streaming) return;
     setSourceError(null);
-    if (conversationId) {
-      await sendTurn(conversationId, content, researchMode, chatMode);
+    if (activeId) {
+      appendTurn(content, chatMode);
+      await streamTurn(activeId, { content, researchMode, chatMode });
       return;
     }
+
+    appendTurn(content, chatMode);
+    setStreaming(true);
+    let created: ConversationDetail;
     try {
-      const created = await createConversation(
+      created = await createConversation(
         selectedSources.length ? "selected" : "all",
         selectedSources.map((document) => document.id),
       );
-      try {
-        sessionStorage.setItem(
-          pendingKey(created.id),
-          JSON.stringify({ content, researchMode, chatMode } satisfies PendingTurn),
-        );
-      } catch {}
-      await queryClient.invalidateQueries({ queryKey: ["conversations"] });
-      router.push(`/chat/${created.id}`);
     } catch (error) {
+      // Roll back and hand the text back so nothing the user typed is lost.
+      setMessages([]);
+      setStreaming(false);
+      setDraft({ text: content, nonce: Date.now() });
       setSourceError(error instanceof Error ? error.message : t("conversationCreateFailed"));
+      return;
     }
+    hydratedIdRef.current = created.id;
+    queryClient.setQueryData(["conversation", created.id], created);
+    setCreatedId(created.id);
+    window.history.pushState(null, "", `/chat/${created.id}`);
+    void queryClient.invalidateQueries({ queryKey: ["conversations"] });
+    await streamTurn(created.id, { content, researchMode, chatMode });
   }
 
   function updateLast(update: (message: DisplayMessage) => DisplayMessage) {
@@ -178,63 +218,81 @@ export function ChatWorkspace({ conversationId }: { conversationId?: string }) {
     });
   }
 
-  async function sendTurn(id: string, content: string, researchMode: ResearchMode, chatMode: ChatMode) {
-    if (streaming) return;
-    lastTurnRef.current = { content, researchMode, chatMode };
+  async function streamTurn(id: string, turn: Turn) {
+    lastTurnRef.current = turn;
     const controller = new AbortController();
     abortRef.current = controller;
     setStreaming(true);
     setToolPhase(null);
-    pinnedRef.current = true;
-    setMessages((current) => [
-      ...current,
-      { role: "user", content, chatMode },
-      { role: "assistant", content: "", pending: true, chatMode },
-    ]);
+
+    // Tokens arrive ~30/s; render at most once per frame instead of per token.
+    let buffered = "";
+    let frame = 0;
+    const flush = () => {
+      frame = 0;
+      if (!buffered) return;
+      const chunk = buffered;
+      buffered = "";
+      updateLast((last) => ({ ...last, content: last.content + chunk }));
+    };
+    const dropBuffer = () => {
+      buffered = "";
+      if (frame) cancelAnimationFrame(frame);
+      frame = 0;
+    };
 
     const fail = (detail: string) => {
+      dropBuffer();
       setToolPhase(null);
       updateLast((last) => ({ ...last, pending: false, error: detail }));
     };
 
     try {
-      await streamChat(id, content, researchMode, chatMode, {
-        onToken: (token) => updateLast((last) => ({ ...last, content: last.content + token })),
+      await streamChat(id, turn.content, turn.researchMode, turn.chatMode, {
+        onToken: (token) => {
+          buffered += token;
+          if (!frame) frame = requestAnimationFrame(flush);
+        },
         // The streamed text was a tool-calling turn ("let me search…"): drop it.
-        onReset: () => updateLast((last) => ({ ...last, content: "" })),
+        onReset: () => {
+          dropBuffer();
+          updateLast((last) => ({ ...last, content: "" }));
+        },
         onToolStart: (_name, _args, phase) => setToolPhase(phaseLabel(phase)),
         onToolEnd: () => setToolPhase(null),
         onDone: (payload) => {
+          dropBuffer();
           setToolPhase(null);
-          updateLast(() => ({
-            role: "assistant",
+          updateLast((last) => ({
+            ...last,
             content: payload.content,
             citations: payload.citations,
             citationMode: payload.citation_mode,
-            chatMode,
+            pending: false,
           }));
         },
         onError: fail,
       }, controller.signal);
     } catch (error) {
       if (controller.signal.aborted) {
+        flush();
         setToolPhase(null);
         updateLast((last) => ({ ...last, pending: false }));
       } else {
         fail(error instanceof Error ? error.message : t("streamFailed"));
       }
     } finally {
-      abortRef.current = null;
+      dropBuffer();
+      if (abortRef.current === controller) abortRef.current = null;
       setStreaming(false);
       void queryClient.invalidateQueries({ queryKey: ["conversations"] });
-      // Picks up the title the first turn assigned. Messages are hydrated once
-      // per conversation, so this refetch never overwrites the live transcript.
+      // Picks up the title the first turn assigned (hydration is one-shot).
       void queryClient.invalidateQueries({ queryKey: ["conversation", id] });
     }
   }
 
   function retryLast() {
-    if (!conversationId) return;
+    if (!activeId || streaming) return;
     // Prefer the exact settings of the turn that failed in this session; for a
     // failure loaded from history, fall back to the last question as asked.
     const lastUser = [...messages].reverse().find((message) => message.role === "user");
@@ -243,7 +301,9 @@ export function ChatWorkspace({ conversationId }: { conversationId?: string }) {
       researchMode: "balanced" as ResearchMode,
       chatMode: lastUser.chatMode ?? composerMode,
     });
-    if (turn) void sendTurn(conversationId, turn.content, turn.researchMode, turn.chatMode);
+    if (!turn) return;
+    appendTurn(turn.content, turn.chatMode);
+    void streamTurn(activeId, turn);
   }
 
   function phaseLabel(phase?: string) {
@@ -253,20 +313,24 @@ export function ChatWorkspace({ conversationId }: { conversationId?: string }) {
     return t("searching");
   }
 
-  const loading = Boolean(conversationId) && conversationQuery.isPending;
-  const showEmptyState = !conversationId || (!loading && messages.length === 0 && !streaming);
-  const composer = (
-    <ChatComposer
-      selectedSources={selectedSources}
-      streaming={streaming}
-      sourceError={sourceError}
-      onSourcesChange={changeSources}
-      onSend={submit}
-      onStop={() => abortRef.current?.abort()}
-      draft={draft}
-      onModeChange={setComposerMode}
-    />
-  );
+  const loading = Boolean(activeId) && conversationQuery.isPending;
+  const empty = !loading && messages.length === 0 && !streaming;
+
+  // FLIP: the composer is one element in both layouts. When the empty state
+  // gives way to the transcript, play it from its old position to the dock
+  // instead of letting it teleport.
+  useLayoutEffect(() => {
+    const dock = dockRef.current;
+    const from = dockTopRef.current;
+    dockTopRef.current = null;
+    if (!dock || from == null) return;
+    const delta = from - dock.getBoundingClientRect().top;
+    if (Math.abs(delta) < 2 || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    dock.animate(
+      [{ transform: `translateY(${delta}px)` }, { transform: "translateY(0)" }],
+      { duration: 280, easing: EASE_IN_OUT },
+    );
+  }, [empty]);
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -283,67 +347,100 @@ export function ChatWorkspace({ conversationId }: { conversationId?: string }) {
       </header>
 
       {loading ? (
-        <div className="mx-auto w-full max-w-3xl space-y-6 px-4 py-8">
+        <div className="mx-auto w-full max-w-3xl flex-1 space-y-6 px-4 py-8">
           <Skeleton className="ms-auto h-10 w-2/3 rounded-2xl" />
           <Skeleton className="h-24 w-full" />
           <Skeleton className="ms-auto h-10 w-1/2 rounded-2xl" />
         </div>
-      ) : showEmptyState ? (
-        <div className="min-h-0 flex-1 overflow-y-auto">
-          <div className="mx-auto flex min-h-full w-full max-w-2xl flex-col justify-center px-4 py-10">
-            <div className="mb-8 text-center">
-              <BrandMark className="mx-auto mb-5 size-11 rounded-xl" />
-              <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">{t("chatWelcome")}</h1>
-              <p className="mx-auto mt-2 max-w-md text-sm text-muted-foreground">{t("chatWelcomeHint")}</p>
-            </div>
-            {composer}
-            <div className="mt-6 flex flex-wrap justify-center gap-2">
-              {SUGGESTIONS[composerMode].map((key) => (
-                <button
-                  key={key}
-                  type="button"
-                  onClick={() => setDraft({ text: t(key), nonce: Date.now() })}
-                  className="rounded-full border bg-card px-3.5 py-1.5 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-                >
-                  {t(key)}
-                </button>
-              ))}
-            </div>
-          </div>
-        </div>
       ) : (
-        <div className="flex min-h-0 flex-1 flex-col">
-          <div ref={scrollRef} onScroll={onScroll} className="scrollbar-thin min-h-0 flex-1 overflow-y-auto">
-            <div className="mx-auto w-full max-w-3xl space-y-8 px-4 py-8 sm:px-6">
-              {messages.map((message, index) =>
-                message.role === "user" ? (
-                  <div key={index} className="flex justify-end">
-                    <div className="max-w-[85%] rounded-2xl rounded-ee-md bg-muted px-4 py-2.5">
-                      <Markdown>{message.content}</Markdown>
-                    </div>
-                  </div>
-                ) : (
-                  <AssistantMessage
-                    key={index}
-                    message={message}
-                    toolPhase={index === messages.length - 1 ? toolPhase : null}
-                    onRetry={index === messages.length - 1 && !streaming ? retryLast : undefined}
-                  />
-                ),
-              )}
-              <div ref={bottomRef} />
+        <>
+          {/* Transcript, or (empty) the greeting sitting just above the composer. */}
+          <div
+            ref={scrollRef}
+            onScroll={onScroll}
+            className={cn(
+              "scrollbar-thin min-h-0 flex-1 overflow-y-auto",
+              empty && "flex flex-col justify-end",
+            )}
+          >
+            {empty ? (
+              <div className="mx-auto w-full max-w-2xl px-4 pb-8 pt-10 text-center">
+                <BrandMark className="mx-auto mb-5 size-11 rounded-xl" />
+                <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">{t("chatWelcome")}</h1>
+                <p className="mx-auto mt-2 max-w-md text-sm text-muted-foreground">{t("chatWelcomeHint")}</p>
+              </div>
+            ) : (
+              <div className="mx-auto w-full max-w-3xl space-y-8 px-4 py-8 sm:px-6">
+                {messages.map((message, index) =>
+                  message.role === "user" ? (
+                    <UserMessage key={index} content={message.content} fresh={message.fresh} />
+                  ) : (
+                    <AssistantMessage
+                      key={index}
+                      message={message}
+                      toolPhase={index === messages.length - 1 ? toolPhase : null}
+                      onRetry={index === messages.length - 1 && !streaming ? retryLast : undefined}
+                    />
+                  ),
+                )}
+              </div>
+            )}
+          </div>
+
+          <div
+            ref={dockRef}
+            className={cn(
+              "shrink-0 px-4 sm:px-6",
+              empty ? "pb-4" : "bg-gradient-to-t from-background from-70% to-transparent pb-4 pt-2",
+            )}
+          >
+            <div className="mx-auto w-full max-w-3xl">
+              <ChatComposer
+                selectedSources={selectedSources}
+                streaming={streaming}
+                sourceError={sourceError}
+                onSourcesChange={changeSources}
+                onSend={submit}
+                onStop={() => abortRef.current?.abort()}
+                draft={draft}
+                onModeChange={setComposerMode}
+              />
             </div>
           </div>
-          <div className="shrink-0 bg-gradient-to-t from-background from-70% to-transparent px-4 pb-4 pt-2 sm:px-6">
-            <div className="mx-auto w-full max-w-3xl">{composer}</div>
-          </div>
-        </div>
+
+          {empty && (
+            <div className="scrollbar-thin min-h-0 flex-1 overflow-y-auto px-4">
+              <div className="mx-auto flex max-w-2xl flex-wrap justify-center gap-2 pt-2">
+                {SUGGESTIONS[composerMode].map((key) => (
+                  <button
+                    key={key}
+                    type="button"
+                    onClick={() => setDraft({ text: t(key), nonce: Date.now() })}
+                    className="rounded-full border bg-card px-3.5 py-1.5 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                  >
+                    {t(key)}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+        </>
       )}
     </div>
   );
 }
 
-function AssistantMessage({
+const UserMessage = memo(function UserMessage({ content, fresh }: { content: string; fresh?: boolean }) {
+  return (
+    <div className={cn("flex justify-end", fresh && "animate-message-in")}>
+      <div className="max-w-[85%] rounded-2xl rounded-ee-md bg-muted px-4 py-2.5">
+        <Markdown>{content}</Markdown>
+      </div>
+    </div>
+  );
+});
+
+const AssistantMessage = memo(function AssistantMessage({
   message, toolPhase, onRetry,
 }: {
   message: DisplayMessage;
@@ -355,8 +452,8 @@ function AssistantMessage({
   const waiting = message.pending && !message.content;
 
   return (
-    <article className="group flex gap-3">
-      <BrandMark className="mt-0.5 size-7 rounded-lg [&_svg]:size-4" />
+    <article className={cn("group flex gap-3", message.fresh && "animate-message-in")}>
+      <BrandMark className="mt-0.5 size-7 rounded-lg p-0.5" />
       <div className="min-w-0 flex-1 space-y-3">
         {message.chatMode === "general" && (
           <Badge variant="secondary" className="gap-1"><Sparkles /> {t("generalBadge")}</Badge>
@@ -370,7 +467,7 @@ function AssistantMessage({
         ) : waiting ? (
           <div className="flex items-center gap-1 py-2" aria-label="…">
             {[0, 150, 300].map((delay) => (
-              <span key={delay} className="size-1.5 animate-bounce rounded-full bg-muted-foreground/60"
+              <span key={delay} className="size-1.5 animate-typing-dot rounded-full bg-muted-foreground"
                     style={{ animationDelay: `${delay}ms` }} />
             ))}
           </div>
@@ -447,5 +544,4 @@ function AssistantMessage({
       </div>
     </article>
   );
-}
-
+});

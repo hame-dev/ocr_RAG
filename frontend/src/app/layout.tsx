@@ -21,7 +21,7 @@ const doc = Noto_Naskh_Arabic({
 });
 
 export const metadata: Metadata = {
-  title: "Document Reader — OCR + RAG",
+  title: "Sovereign AI",
   description: "Read, correct and chat with Arabic and English documents.",
 };
 

@@ -37,8 +37,9 @@
     --success: 142 71% 32%;
     --warning: 32 95% 40%;
 
-    --primary-l: 221 83% 53%;
-    --primary-d: 213 94% 68%;
+    /* Default accent = the logo's blue (#014f7b); dark member lifted for contrast. */
+    --primary-l: 201 98% 24%;
+    --primary-d: 197 80% 58%;
     --primary: var(--primary-l);
     --primary-foreground: 0 0% 100%;
     --ring: var(--primary);
@@ -96,6 +97,7 @@
 
   /* Accent pairs: the light member passes contrast on white, the dark member
      stays legible on the near-black card surface. */
+  :root[data-accent="brand"]   { --primary-l: 201 98% 24%; --primary-d: 197 80% 58%; }
   :root[data-accent="blue"]    { --primary-l: 221 83% 53%; --primary-d: 213 94% 68%; }
   :root[data-accent="violet"]  { --primary-l: 262 83% 58%; --primary-d: 255 92% 76%; }
   :root[data-accent="emerald"] { --primary-l: 161 94% 30%; --primary-d: 158 64% 52%; }
@@ -276,4 +278,7 @@
 
 @media (prefers-reduced-motion: reduce) {
   .md-cursor { animation: none; }
+  /* Keep the fade (it aids comprehension), drop the movement. */
+  .animate-message-in { animation: fade-in 200ms ease-out both; }
+  .animate-typing-dot { animation: pulse 1.2s ease-in-out infinite; }
 }

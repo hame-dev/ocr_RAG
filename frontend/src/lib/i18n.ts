@@ -11,7 +11,7 @@ export const dirFor = (locale: Locale) => (locale === "ar" ? "rtl" : "ltr");
 
 const STRINGS = {
   ar: {
-    appName: "قارئ المستندات",
+    appName: "الذكاء الاصطناعي السيادي",
     library: "المكتبة",
     upload: "رفع مستند",
     chat: "محادثة",
@@ -93,7 +93,7 @@ const STRINGS = {
     accentColor: "اللون المميز",
     language: "اللغة",
     signIn: "تسجيل الدخول",
-    signInTitle: "سجّل الدخول إلى قارئ المستندات",
+    signInTitle: "سجّل الدخول إلى الذكاء الاصطناعي السيادي",
     signInHint: "الحسابات يُنشئها المسؤول. تواصل معه إن لم يكن لديك حساب.",
     username: "اسم المستخدم",
     password: "كلمة المرور",
@@ -279,7 +279,7 @@ const STRINGS = {
     suspectSummary: "هذه النتيجة أقصر بكثير من غيرها؛ ربما لخّص النموذج النص بدلاً من نسخه.",
   },
   en: {
-    appName: "Document Reader",
+    appName: "Sovereign AI",
     library: "Library",
     upload: "Upload",
     chat: "Chat",
@@ -361,7 +361,7 @@ const STRINGS = {
     accentColor: "Accent color",
     language: "Language",
     signIn: "Sign in",
-    signInTitle: "Sign in to Document Reader",
+    signInTitle: "Sign in to Sovereign AI",
     signInHint: "Accounts are created by an administrator. Ask them if you don't have one.",
     username: "Username",
     password: "Password",

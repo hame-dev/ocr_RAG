@@ -1,12 +1,14 @@
 import { LOCALE_KEY } from "./i18n";
 
 export type ThemeMode = "system" | "light" | "dark";
-export type Accent = "blue" | "violet" | "emerald" | "amber" | "rose" | "teal";
+export type Accent = "brand" | "blue" | "violet" | "emerald" | "amber" | "rose" | "teal";
 
 export const THEME_MODES: ThemeMode[] = ["system", "light", "dark"];
 
 /** Swatch values are the light-mode hex from globals.css, for the picker chips. */
 export const ACCENTS: { name: Accent; swatch: string; label_en: string; label_ar: string }[] = [
+  // Matches the logo's primary blue (#014f7b).
+  { name: "brand", swatch: "#014f7b", label_en: "Sovereign", label_ar: "السيادي" },
   { name: "blue", swatch: "#2563eb", label_en: "Blue", label_ar: "أزرق" },
   { name: "violet", swatch: "#7c3aed", label_en: "Violet", label_ar: "بنفسجي" },
   { name: "emerald", swatch: "#059669", label_en: "Emerald", label_ar: "أخضر" },
@@ -16,7 +18,7 @@ export const ACCENTS: { name: Accent; swatch: string; label_en: string; label_ar
 ];
 
 export const DEFAULT_MODE: ThemeMode = "system";
-export const DEFAULT_ACCENT: Accent = "blue";
+export const DEFAULT_ACCENT: Accent = "brand";
 
 export const MODE_KEY = "theme-mode";
 export const ACCENT_KEY = "theme-accent";
