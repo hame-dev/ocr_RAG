@@ -1,13 +1,21 @@
 from __future__ import annotations
 
 from django.http import Http404
-from rest_framework import status
+from rest_framework import serializers, status
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
 from correction.guards import apply_changes
 from correction.models import AICorrectionJob
 from common.ownership import get_owned_document
+
+
+class StartCorrectionSerializer(serializers.Serializer):
+    multimodal = serializers.BooleanField(required=False, default=True)
+    scope = serializers.ChoiceField(choices=["all", "pages"], required=False, default="all")
+    pages = serializers.ListField(
+        child=serializers.IntegerField(min_value=1), required=False, default=list, max_length=2000
+    )
 
 
 @api_view(["POST"])
@@ -19,12 +27,13 @@ def start_correction(request, document_id):
             status=status.HTTP_400_BAD_REQUEST,
         )
 
+    serializer = StartCorrectionSerializer(data=request.data)
+    serializer.is_valid(raise_exception=True)
+
     job = AICorrectionJob.objects.create(
         document=document,
         base_revision=document.current_revision,
-        multimodal=request.data.get("multimodal", True),
-        scope=request.data.get("scope", "all"),
-        pages=request.data.get("pages", []),
+        **serializer.validated_data,
     )
 
     from correction.tasks import run_ai_correction

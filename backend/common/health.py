@@ -5,7 +5,8 @@
 actually broken, including per-engine status.
 
 Both are public: container healthchecks and the smoke script call them without
-a session.
+a session. Anonymous callers of the deep check get only ok/degraded per
+dependency; the details (hosts, model names, raw errors) need a login.
 """
 from __future__ import annotations
 
@@ -14,6 +15,8 @@ from django.db import connection
 from rest_framework.decorators import api_view, authentication_classes, permission_classes
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
+
+from accounts.authentication import SessionAuthentication401
 
 
 @api_view(["GET"])
@@ -24,7 +27,7 @@ def liveness(request):
 
 
 @api_view(["GET"])
-@authentication_classes([])
+@authentication_classes([SessionAuthentication401])
 @permission_classes([AllowAny])
 def readiness(request):
     checks: dict[str, dict] = {}
@@ -103,5 +106,7 @@ def readiness(request):
         checks["ocr_engines"] = {"ok": False, "detail": str(exc)}
         ok = False
 
+    if not request.user.is_authenticated:
+        checks = {name: {"ok": check["ok"]} for name, check in checks.items()}
     return Response({"status": "ok" if ok else "degraded", "checks": checks},
                     status=200 if ok else 503)

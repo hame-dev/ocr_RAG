@@ -72,6 +72,9 @@ DATABASES = {
     "default": dj_database_url.parse(
         os.environ.get("DATABASE_URL", "postgresql://ocrrag:ocrrag@db:5432/ocrrag"),
         conn_max_age=600,
+        # Long-lived Celery workers otherwise keep a dead connection after a
+        # Postgres restart and fail their next task with AdminShutdown.
+        conn_health_checks=True,
     )
 }
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
@@ -90,6 +93,8 @@ AUTH_PASSWORD_VALIDATORS = [
 
 STATIC_URL = "/static/"
 MEDIA_ROOT = os.environ.get("MEDIA_ROOT", "/data/media")
+# Document uploads. Matches the frontend's MAX_MB; chat attachments have their own cap.
+MAX_UPLOAD_BYTES = int(os.environ.get("MAX_UPLOAD_MB", "50")) * 1024 * 1024
 
 # ---- DRF --------------------------------------------------------------------
 REST_FRAMEWORK = {

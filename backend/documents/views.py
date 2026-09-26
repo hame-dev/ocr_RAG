@@ -66,12 +66,8 @@ class DocumentViewSet(viewsets.ModelViewSet):
         document = Document.objects.create(
             owner=request.user,
             title=serializer.validated_data.get("title", ""),
-            original_filename=upload.name,
-            mime_type=(
-                upload.content_type
-                or mimetypes.guess_type(upload.name)[0]
-                or "application/octet-stream"
-            ),
+            original_filename=upload.name[:512],
+            mime_type=upload.sniffed_mime,
             size_bytes=upload.size,
             metadata_mode=serializer.validated_data.get("metadata_mode", "auto"),
             required_fields=serializer.validated_data.get("required_fields", []),
@@ -80,7 +76,8 @@ class DocumentViewSet(viewsets.ModelViewSet):
 
         target_dir = os.path.join(settings.MEDIA_ROOT, "docs", str(document.id))
         os.makedirs(target_dir, exist_ok=True)
-        extension = os.path.splitext(upload.name)[1] or ".bin"
+        # From the sniffed type, not the client's filename.
+        extension = mimetypes.guess_extension(upload.sniffed_mime) or ".bin"
         target_path = os.path.join(target_dir, f"original{extension}")
 
         digest = hashlib.sha256()
@@ -135,7 +132,10 @@ class DocumentViewSet(viewsets.ModelViewSet):
     def events(self, request, pk=None):
         """Polling fallback for clients that cannot consume the SSE stream."""
         document = self.get_object()
-        since = int(request.query_params.get("since", 0))
+        try:
+            since = int(request.query_params.get("since", 0))
+        except ValueError:
+            return Response({"detail": "since must be an integer"}, status=status.HTTP_400_BAD_REQUEST)
         events = document.events.filter(seq__gt=since)[:500]
         return Response(DocumentEventSerializer(events, many=True).data)
 

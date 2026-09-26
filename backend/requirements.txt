@@ -1,8 +1,8 @@
 # ---- Web framework ----------------------------------------------------------
 # 5.2 LTS rather than 6.0: the DRF / drf-spectacular ecosystem is settled here,
 # and nothing in this project needs 6.x.
-Django==5.2.7
-djangorestframework==3.16.1
+Django==5.2.17
+djangorestframework==3.17.2
 drf-spectacular==0.28.0
 django-cors-headers==4.7.0
 django-filter==25.1
@@ -33,7 +33,7 @@ ollama==0.5.4
 pypdfium2==4.30.1          # rasterization + native text layer extraction
 opencv-python-headless==4.11.0.86
 scikit-image==0.25.2       # Sauvola binarization
-Pillow==11.3.0
+Pillow==12.3.0
 python-docx==1.2.0         # .docx text for chat attachments
 numpy==2.2.6
 pytesseract==0.3.13
@@ -67,13 +67,13 @@ rapidfuzz==3.13.0          # levenshtein for correction guards + citation matchi
 
 # ---- Config / validation ----------------------------------------------------
 pydantic==2.11.7
-python-dotenv==1.1.1
+python-dotenv==1.2.3
 httpx==0.28.1
 
 # ---- Test fixtures ----------------------------------------------------------
 # WeasyPrint renders through Pango/HarfBuzz, which does Arabic shaping and the
 # bidi algorithm correctly. ReportLab does neither.
-weasyprint==65.1
+weasyprint==70.0
 jiwer==3.1.0               # CER/WER against ground truth
 
 # ---- Tests ------------------------------------------------------------------

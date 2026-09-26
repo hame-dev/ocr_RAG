@@ -20,6 +20,8 @@ x-django-env: &django-env
   SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-0}
   CSRF_COOKIE_SECURE: ${CSRF_COOKIE_SECURE:-0}
   LOGIN_THROTTLE_RATE: ${LOGIN_THROTTLE_RATE:-5/min}
+  DEFAULT_USERNAME: ${DEFAULT_USERNAME:-NCST_system}
+  DEFAULT_PASSWORD: ${DEFAULT_PASSWORD:-NCST@12345}
   DATABASE_URL: postgresql://${POSTGRES_USER:-ocrrag}:${POSTGRES_PASSWORD:-ocrrag}@db:5432/${POSTGRES_DB:-ocrrag}
   REDIS_URL: redis://redis:6379/0
   MEDIA_ROOT: /data/media
@@ -90,7 +92,7 @@ services:
   migrate:
     <<: [*backend-build, *backend-volumes, *hosts]
     environment: {<<: [*django-env, *ollama-env]}
-    command: ["sh", "-c", "python manage.py migrate --noinput && python manage.py init_checkpointer"]
+    command: ["sh", "-c", "python manage.py migrate --noinput && python manage.py init_checkpointer && python manage.py seed_default_user"]
     depends_on:
       db: {condition: service_healthy}
     restart: "no"

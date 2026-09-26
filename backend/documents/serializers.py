@@ -1,3 +1,4 @@
+from django.conf import settings
 from rest_framework import serializers
 
 from documents.models import Document, DocumentEvent, DocumentPage, TextRevision
@@ -78,13 +79,55 @@ class DocumentDetailSerializer(DocumentListSerializer):
         return obj.revisions.count()
 
 
+# Image formats OpenCV can rasterize in preprocessing.
+IMAGE_FORMATS = {"PNG", "JPEG", "TIFF", "WEBP", "BMP"}
+
+
+def sniff_mime(upload) -> str | None:
+    """The upload's real type from its content, or None if it is unsupported.
+
+    Preprocessing branches on mime_type, so it must never come from the
+    client's Content-Type or the file extension.
+    """
+    head = upload.read(8)
+    upload.seek(0)
+    if head.startswith(b"%PDF-"):
+        return "application/pdf"
+
+    from PIL import Image
+
+    try:
+        with Image.open(upload) as image:
+            image.verify()
+            fmt = image.format
+    except Exception:
+        return None
+    finally:
+        upload.seek(0)
+    return Image.MIME.get(fmt) if fmt in IMAGE_FORMATS else None
+
+
 class UploadSerializer(serializers.Serializer):
     file = serializers.FileField()
-    title = serializers.CharField(required=False, allow_blank=True)
+    title = serializers.CharField(required=False, allow_blank=True, max_length=512)
     metadata_mode = serializers.ChoiceField(
         choices=["auto", "advanced"], required=False, default="auto"
     )
-    required_fields = serializers.ListField(child=serializers.JSONField(), required=False)
+    required_fields = serializers.ListField(
+        child=serializers.JSONField(), required=False, max_length=50
+    )
+
+    def validate_file(self, upload):
+        limit = settings.MAX_UPLOAD_BYTES
+        if upload.size > limit:
+            raise serializers.ValidationError(
+                f"file is larger than {limit // (1024 * 1024)} MB"
+            )
+        mime = sniff_mime(upload)
+        if mime is None:
+            raise serializers.ValidationError("only PDF and image files are supported")
+        upload.sniffed_mime = mime
+        return upload
 
 
 class CreateRevisionSerializer(serializers.Serializer):

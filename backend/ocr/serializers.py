@@ -43,7 +43,11 @@ class StartOCRSerializer(serializers.Serializer):
     engines = serializers.ListField(
         child=serializers.CharField(), allow_empty=False, min_length=1, required=False
     )
-    languages = serializers.ListField(child=serializers.CharField(), required=False)
-    options = serializers.JSONField(required=False)
+    languages = serializers.ListField(
+        child=serializers.CharField(max_length=8), max_length=8, required=False
+    )
+    # Engine tuning. Engines read only the keys they know (tesseract: psm, oem)
+    # and validate the values themselves.
+    options = serializers.DictField(required=False)
     # Lets the user run an engine the health probe currently reports as down.
     force = serializers.BooleanField(required=False, default=False)

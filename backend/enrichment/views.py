@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from django.http import Http404
-from rest_framework import status
+from rest_framework import serializers, status
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
@@ -9,6 +9,38 @@ from common.ownership import get_owned_document
 from enrichment import extractor
 from enrichment.models import ExtractionPlan, MetadataRecord
 from enrichment.schemas import JSON_TYPE_MAP, build_extraction_schema, core_schema
+
+
+class EnrichSerializer(serializers.Serializer):
+    mode = serializers.ChoiceField(choices=["auto", "advanced"], required=False)
+    required_fields = serializers.ListField(
+        child=serializers.DictField(), required=False, max_length=50
+    )
+    auto_index = serializers.BooleanField(required=False, default=True)
+
+
+def _string_list(max_length: int):
+    return serializers.ListField(
+        child=serializers.CharField(max_length=max_length, allow_blank=True),
+        required=False, max_length=200,
+    )
+
+
+class MetadataPatchSerializer(serializers.Serializer):
+    """Only the human-editable fields, each with the type its column stores."""
+    doc_type = serializers.CharField(max_length=48, allow_blank=True, required=False)
+    title = serializers.CharField(max_length=1024, allow_blank=True, required=False)
+    title_translit = serializers.CharField(max_length=1024, allow_blank=True, required=False)
+    primary_language = serializers.CharField(max_length=8, allow_blank=True, required=False)
+    languages = _string_list(8)
+    summary_short = serializers.CharField(allow_blank=True, required=False)
+    summary_long = serializers.CharField(allow_blank=True, required=False)
+    keywords = _string_list(96)
+    topics = _string_list(96)
+    entities = serializers.DictField(required=False)
+    dates = serializers.DictField(required=False)
+    identifiers = serializers.DictField(required=False)
+    custom_fields = serializers.DictField(required=False)
 
 
 def _document(request, document_id):
@@ -82,17 +114,18 @@ def enrich(request, document_id):
             status=status.HTTP_400_BAD_REQUEST,
         )
 
-    if mode := request.data.get("mode"):
+    serializer = EnrichSerializer(data=request.data)
+    serializer.is_valid(raise_exception=True)
+    data = serializer.validated_data
+    if mode := data.get("mode"):
         document.metadata_mode = mode
-    if required := request.data.get("required_fields"):
+    if required := data.get("required_fields"):
         document.required_fields = required
     document.save(update_fields=["metadata_mode", "required_fields", "updated_at"])
 
     from enrichment.tasks import enrich_document
 
-    enrich_document.delay(
-        str(document.id), auto_index=request.data.get("auto_index", True)
-    )
+    enrich_document.delay(str(document.id), auto_index=data["auto_index"])
     return Response({"status": "queued"}, status=status.HTTP_202_ACCEPTED)
 
 
@@ -104,18 +137,13 @@ def metadata(request, document_id):
         raise Http404("this document has no metadata record yet")
 
     if request.method == "PATCH":
-        editable = {
-            "doc_type", "title", "title_translit", "primary_language", "languages",
-            "summary_short", "summary_long", "keywords", "topics", "entities",
-            "dates", "identifiers", "custom_fields",
-        }
-        for key, value in request.data.items():
-            if key in editable:
-                setattr(record, key, value)
-        if "dates" in request.data:
-            record.document_date = extractor.parse_date(
-                (request.data["dates"] or {}).get("document_date")
-            )
+        serializer = MetadataPatchSerializer(data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        changes = serializer.validated_data
+        for key, value in changes.items():
+            setattr(record, key, value)
+        if "dates" in changes:
+            record.document_date = extractor.parse_date(changes["dates"].get("document_date"))
         # Marks the record as human-authored so the UI can show provenance and
         # re-enrichment does not silently overwrite a person's corrections.
         record.human_edited = True

@@ -73,10 +73,18 @@ The interface defaults to English and switches to Arabic with full RTL layout; t
 cp .env.example .env
 make warmup              # pulls the host Ollama models
 make up
-make createuser U=alice  # prompts for a password; add STAFF=1 for staff
 ```
 
-Then open <http://localhost:3000> and sign in. `make help` lists every target.
+Then open <http://localhost:3000> and sign in with the seeded default account:
+
+| Username      | Password     |
+|---------------|--------------|
+| `NCST_system` | `NCST@12345` |
+
+It is created on first start (and by `make seed`) only if it does not exist, so
+changing its password later sticks. Override it with `DEFAULT_USERNAME` /
+`DEFAULT_PASSWORD` in `.env`, and change it for any shared deployment. More
+accounts: `make createuser U=alice` (prompts for a password; add STAFF=1 for staff). `make help` lists every target.
 
 ```bash
 make fixtures  # generate the bilingual test PDFs

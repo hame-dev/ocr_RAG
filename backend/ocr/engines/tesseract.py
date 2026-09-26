@@ -28,6 +28,25 @@ logger = logging.getLogger(__name__)
 # Tesseract wants ISO-639-2 codes joined by '+'.
 LANG_MAP = {"ar": "ara", "en": "eng", "ara": "ara", "eng": "eng"}
 
+# psm 3 = fully automatic page segmentation. oem 1 = LSTM only, which is
+# substantially better than the legacy engine on Arabic.
+DEFAULT_PSM, DEFAULT_OEM = 3, 1
+VALID_PSM, VALID_OEM = range(0, 14), range(0, 4)
+
+
+def build_config(options: dict) -> str:
+    """Tesseract flags from request options, never a raw string.
+
+    Job options come from the API caller. Passing a free-form config through
+    would let them set arbitrary `-c` variables, some of which write files
+    (e.g. debug_file) inside the worker.
+    """
+    def pick(key, valid, default):
+        value = options.get(key, default)
+        return value if isinstance(value, int) and not isinstance(value, bool) and value in valid else default
+
+    return f"--oem {pick('oem', VALID_OEM, DEFAULT_OEM)} --psm {pick('psm', VALID_PSM, DEFAULT_PSM)}"
+
 
 @register
 class TesseractEngine(OCREngine):
@@ -79,7 +98,9 @@ class TesseractEngine(OCREngine):
         )
 
     def _lang_string(self, languages: list[str]) -> str:
-        codes = [LANG_MAP.get(lang, lang) for lang in languages]
+        # Unknown codes are dropped: the string becomes a `-l` argument, and
+        # tesseract resolves it to a traineddata path.
+        codes = [LANG_MAP[lang] for lang in languages if lang in LANG_MAP]
         seen, ordered = set(), []
         for code in codes:
             if code not in seen:
@@ -92,9 +113,7 @@ class TesseractEngine(OCREngine):
         from PIL import Image
 
         lang = self._lang_string(job.languages)
-        # psm 3 = fully automatic page segmentation. oem 1 = LSTM only, which is
-        # substantially better than the legacy engine on Arabic.
-        config = job.options.get("tesseract_config", "--oem 1 --psm 3")
+        config = build_config(job.options or {})
 
         started = time.monotonic()
         pages: list[OCRPage] = []

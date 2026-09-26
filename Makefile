@@ -1,4 +1,4 @@
-.PHONY: help up down build logs migrate warmup smoke test createuser claim shell psql clean ps
+.PHONY: help up down build logs migrate warmup smoke test seed createuser claim shell psql clean ps
 
 COMPOSE := docker compose
 
@@ -38,6 +38,9 @@ test:   ## Run the backend test suite
 
 fixtures: ## Generate the bilingual test PDFs
 	$(COMPOSE) run --rm backend python tests/fixtures/make_test_pdf.py
+
+seed:   ## Create the default login (NCST_system) if it does not exist
+	$(COMPOSE) run --rm backend python manage.py seed_default_user
 
 createuser: ## Create a login (make createuser U=alice, add STAFF=1 for staff)
 	@test -n "$(U)" || (echo "usage: make createuser U=<username> [STAFF=1]" && exit 1)

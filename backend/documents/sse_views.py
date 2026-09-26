@@ -97,8 +97,9 @@ async def document_events(request, document_id: str):
         try:
             try:
                 yield sse("snapshot", await _snapshot(document_id))
-            except Exception as exc:
-                yield sse("error", {"detail": f"could not load document: {exc}"})
+            except Exception:
+                logger.exception("document snapshot failed for %s", document_id)
+                yield sse("error", {"detail": "could not load document"})
                 return
 
             client = aioredis.from_url(settings.REDIS_URL, decode_responses=True)

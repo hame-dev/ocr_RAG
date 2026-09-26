@@ -54,3 +54,22 @@ def test_claim_unowned_assigns_only_rows_without_an_owner(user, other_user):
     assert orphan.owner == user
     assert theirs.owner == other_user
     assert orphan_chat.owner == user
+
+
+def test_seed_default_user_creates_the_login_once(monkeypatch):
+    monkeypatch.delenv("DEFAULT_USERNAME", raising=False)
+    monkeypatch.delenv("DEFAULT_PASSWORD", raising=False)
+
+    call_command("seed_default_user", stdout=io.StringIO())
+
+    user = get_user_model().objects.get(username="NCST_system")
+    assert user.is_staff and user.is_superuser
+    assert user.check_password("NCST@12345")
+
+    # A later password change survives re-seeding.
+    user.set_password("changed-after-seeding")
+    user.save()
+    call_command("seed_default_user", stdout=io.StringIO())
+    user.refresh_from_db()
+    assert user.check_password("changed-after-seeding")
+    assert get_user_model().objects.filter(username="NCST_system").count() == 1

@@ -11,6 +11,7 @@ and normalized on upload, so what reaches the model is bounded and predictable:
 from __future__ import annotations
 
 import base64
+import html
 import io
 import logging
 import os
@@ -230,7 +231,9 @@ def build_human_content(text: str, attachments: list[ChatAttachment], images_alr
     budget = TEXT_BUDGET_CHARS
     blocks = []
     for attachment in attachments:
-        header = f'<attachment name="{attachment.filename}" kind="{attachment.kind}"'
+        # The filename is user-chosen; escape it so it cannot close the tag and
+        # pose as instructions outside the attachment.
+        header = f'<attachment name="{html.escape(attachment.filename)}" kind="{attachment.kind}"'
         if attachment.page_count:
             header += f' pages="{attachment.page_count}"'
         if attachment.extracted_text:
