@@ -13,8 +13,8 @@ from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResu
 class ScriptedChatModel(BaseChatModel):
     """Replies from a shared script, streaming reasoning like qwen does.
 
-    Each step is {"content": str, "reasoning": str}. Every model instance the
-    graph creates pulls from the same script, in call order.
+    Each step is {"content": str, "reasoning": str, "tool_calls": list}. Every
+    model instance the graph creates pulls from the same script, in call order.
     """
 
     next_step: Callable[[list], dict]
@@ -27,7 +27,10 @@ class ScriptedChatModel(BaseChatModel):
         step = self.next_step(messages)
         extra = {"reasoning_content": step["reasoning"]} if step.get("reasoning") else {}
         return ChatResult(generations=[ChatGeneration(
-            message=AIMessage(content=step.get("content", ""), additional_kwargs=extra)
+            message=AIMessage(
+                content=step.get("content", ""), additional_kwargs=extra,
+                tool_calls=step.get("tool_calls") or [],
+            )
         )])
 
     async def _astream(self, messages, stop=None, run_manager=None, **kwargs):
@@ -44,6 +47,10 @@ class ScriptedChatModel(BaseChatModel):
             if run_manager:
                 await run_manager.on_llm_new_token(piece, chunk=chunk)
             yield chunk
+        for index, call in enumerate(step.get("tool_calls") or []):
+            yield ChatGenerationChunk(message=AIMessageChunk(content="", tool_call_chunks=[{
+                "name": call["name"], "args": json.dumps(call["args"]), "id": call["id"], "index": index,
+            }]))
 
 
 def _pieces(text: str) -> list[str]:
@@ -64,11 +71,13 @@ class Script:
         return self.steps.pop(0) if self.steps else {"content": ""}
 
     def __call__(self, *, with_tools: bool = True, reasoning: bool = False,
-                 json: bool = False, final: bool = False, max_tokens: int | None = None):
+                 json: bool = False, final: bool = False, max_tokens: int | None = None,
+                 tools: list | None = None):
         from chat.graph import FINAL_ANSWER_TAG
 
         self.calls.append({"with_tools": with_tools, "reasoning": reasoning, "json": json, "final": final,
-                           "max_tokens": max_tokens})
+                           "max_tokens": max_tokens,
+                           "tools": [t.name for t in tools] if tools is not None else None})
         model = ScriptedChatModel(next_step=self._next)
         return model.with_config(tags=[FINAL_ANSWER_TAG]) if final else model
 

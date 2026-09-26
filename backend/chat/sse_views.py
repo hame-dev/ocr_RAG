@@ -45,10 +45,11 @@ async def chat_stream(request, conversation_id):
     from asgiref.sync import sync_to_async
 
     from chat import attachments as chat_attachments
+    from chat.code_tools import serialize_file
     from chat.graph import (
         FINAL_ANSWER_TAG, SCOPE_ALL, SCOPE_SELECTED, get_graph, resolve_citations,
     )
-    from chat.models import ChatAttachment, Conversation, Message
+    from chat.models import ChatAttachment, Conversation, GeneratedFile, Message
     from chat.research import (
         DEFAULT_CHAT_MODE,
         DEFAULT_RESEARCH_MODE,
@@ -165,7 +166,39 @@ async def chat_stream(request, conversation_id):
         follow_ups: list[str] = []
         retrieved: dict = {}
         search_starts = 0
+        # General mode's run_python calls: what the UI shows, and the files
+        # they saved, bound to the assistant message once it exists.
+        code_runs: list[dict] = []
+        file_ids: list[str] = []
+        # run_python calls started but not ended, by run id -> their code. A
+        # call whose arguments fail validation raises before the tool body runs
+        # and never reaches on_tool_end; these are reported as failed runs.
+        pending_runs: dict[str, str] = {}
         started = time.monotonic()
+
+        def unfinished_runs() -> list[dict]:
+            runs = [
+                _code_run(code, {"stderr": "The code could not be run: the tool call was invalid."})
+                for code in pending_runs.values()
+            ]
+            pending_runs.clear()
+            code_runs.extend(runs)
+            return runs
+
+        async def save_reply(**fields) -> Message:
+            message = await Message.objects.acreate(
+                conversation=conversation, role="assistant", tool_calls=code_runs, **fields
+            )
+            if file_ids:
+                await GeneratedFile.objects.filter(id__in=file_ids).aupdate(message=message)
+            return message
+
+        async def load_files(ids: list[str]) -> list[dict]:
+            files = {
+                str(f.id): f
+                async for f in GeneratedFile.objects.filter(id__in=ids, owner=user)
+            }
+            return [serialize_file(files[i]) for i in ids if i in files]
 
         def is_answer(event) -> bool:
             # Only calls tagged as producing the answer stream as answer text;
@@ -198,6 +231,8 @@ async def chat_stream(request, conversation_id):
                 {
                     "messages": [HumanMessage(content=human_content)],
                     "doc_ids": doc_ids,
+                    "user_id": user.pk,
+                    "conversation_id": str(conversation.id),
                     "scope_note": scope_note,
                     "research_mode": research_mode,
                     "chat_mode": chat_mode,
@@ -213,6 +248,9 @@ async def chat_stream(request, conversation_id):
                 kind = event["event"]
 
                 if kind == "on_chat_model_start":
+                    # The model is answering again, so every tool call has settled.
+                    for run in unfinished_runs():
+                        yield sse("code_run", {**run, "files": []})
                     new_reasoning_run = True
                     if is_answer(event):
                         turn_start = len(buffer)
@@ -272,14 +310,24 @@ async def chat_stream(request, conversation_id):
                     phase = _tool_phase(tool_name, search_starts)
                     if tool_name == "search_documents":
                         search_starts += 1
+                    args = event["data"].get("input")
+                    if tool_name == "run_python":
+                        # Only the code: the injected owner/conversation ids are not UI data.
+                        code = str(args.get("code") or "") if isinstance(args, dict) else ""
+                        pending_runs[str(event.get("run_id"))] = code
+                        args = {"code": code}
                     yield sse(
                         "tool_start",
-                        {
-                            "name": tool_name,
-                            "phase": phase,
-                            "args": _safe(event["data"].get("input")),
-                        },
+                        {"name": tool_name, "phase": phase, "args": _safe(args)},
                     )
+
+                elif kind == "on_tool_end" and event["name"] == "run_python":
+                    code = pending_runs.pop(str(event.get("run_id")), "")
+                    artifact = getattr(event["data"].get("output"), "artifact", None) or {}
+                    run = _code_run(artifact.get("code") or code, artifact)
+                    file_ids.extend(run["file_ids"])
+                    code_runs.append(run)
+                    yield sse("code_run", {**run, "files": await load_files(run["file_ids"])})
 
                 elif kind == "on_tool_end":
                     output = event["data"].get("output")
@@ -291,13 +339,13 @@ async def chat_stream(request, conversation_id):
                         {"name": event["name"], "hits": len(hits), "total": len(retrieved)},
                     )
 
+            for run in unfinished_runs():
+                yield sse("code_run", {**run, "files": []})
             if thinking_started is not None and thinking_ms is None:
                 thinking_ms = int((time.monotonic() - thinking_started) * 1000)
             text, citations, mode = resolve_citations("".join(buffer), retrieved)
             summary = _phase_summary(phases)
-            message = await Message.objects.acreate(
-                conversation=conversation,
-                role="assistant",
+            message = await save_reply(
                 content=text,
                 citations=citations,
                 citation_mode=mode,
@@ -328,16 +376,16 @@ async def chat_stream(request, conversation_id):
                     "thinking_ms": thinking_ms,
                     "follow_ups": follow_ups,
                     "phases": summary,
+                    "tool_calls": code_runs,
+                    "files": await load_files(file_ids),
                 },
             )
 
         except asyncio.CancelledError:
             # The user closed the tab. Keep what was generated rather than
             # throwing away a 30-second answer.
-            if buffer or reasoning:
-                await Message.objects.acreate(
-                    conversation=conversation,
-                    role="assistant",
+            if buffer or reasoning or code_runs:
+                await save_reply(
                     content="".join(buffer),
                     is_partial=True,
                     reasoning="".join(reasoning),
@@ -350,9 +398,7 @@ async def chat_stream(request, conversation_id):
             logger.exception("chat stream failed for conversation %s", conversation_id)
             # Always record the failed turn, even with no text, so the question
             # is never left without a reply in the transcript.
-            await Message.objects.acreate(
-                conversation=conversation,
-                role="assistant",
+            await save_reply(
                 content="".join(buffer),
                 is_partial=True,
                 error=GENERATION_FAILED,
@@ -386,9 +432,24 @@ def _model_id() -> str:
 def _tool_phase(tool_name: str, search_starts: int) -> str:
     if tool_name == "search_documents":
         return "searching" if search_starts == 0 else "comparing"
+    if tool_name == "run_python":
+        return "running_code"
     if tool_name in {"get_chunk_context", "read_document_page", "get_document_metadata"}:
         return "verifying"
     return "reviewing"
+
+
+def _code_run(code: str, artifact: dict) -> dict:
+    """One run_python call as the UI shows it and Message.tool_calls stores it."""
+    return {
+        "name": "run_python",
+        "code": code,
+        "ok": bool(artifact.get("ok")),
+        "stdout": artifact.get("stdout") or "",
+        "stderr": artifact.get("stderr") or "",
+        "duration_ms": artifact.get("duration_ms"),
+        "file_ids": [str(i) for i in artifact.get("file_ids") or []],
+    }
 
 
 def _extract_hits(output) -> list[dict]:

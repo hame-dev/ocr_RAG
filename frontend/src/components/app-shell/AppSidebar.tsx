@@ -1,18 +1,22 @@
 "use client";
 
-import { Fragment } from "react";
+import { Fragment, useState } from "react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
-import { useQuery } from "@tanstack/react-query";
+import { usePathname, useRouter } from "next/navigation";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  ChevronsUpDown, FolderOpen, Languages, LogOut, MessagesSquare, Monitor, Moon,
-  PanelLeftClose, PanelLeftOpen, Settings, SquarePen, Sun, Upload,
+  ChevronsUpDown, Ellipsis, FolderOpen, Languages, LogOut, MessagesSquare, Monitor, Moon,
+  PanelLeftClose, PanelLeftOpen, Settings, SquarePen, Sun, Trash2, Upload,
 } from "lucide-react";
-import { api, ConversationSummary } from "@/lib/api";
-import { StringKey } from "@/lib/i18n";
+import { toast } from "sonner";
+import { api, ConversationSummary, deleteConversation } from "@/lib/api";
+import { fmt, StringKey } from "@/lib/i18n";
 import { ThemeMode } from "@/lib/theme";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
+} from "@/components/ui/dialog";
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel,
   DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuSeparator, DropdownMenuTrigger,
@@ -64,6 +68,7 @@ export function AppSidebar({ collapsed = false, onToggleCollapsed, onNavigate }:
     queryFn: () => api<{ results: ConversationSummary[] }>("/api/conversations/"),
   });
   const conversations = data?.results ?? [];
+  const [pendingDelete, setPendingDelete] = useState<ConversationSummary | null>(null);
 
   const item = (href: string, label: string, Icon: typeof FolderOpen, active: boolean) => {
     const link = (
@@ -139,27 +144,15 @@ export function AppSidebar({ collapsed = false, onToggleCollapsed, onNavigate }:
               <p className="px-2.5 py-2 text-xs text-muted-foreground">{t("noConversations")}</p>
             ) : (
               <ul className="space-y-0.5">
-                {conversations.slice(0, 30).map((conversation) => {
-                  const active = conversation.id === activeChat;
-                  return (
-                    <li key={conversation.id}>
-                      <Link
-                        href={`/chat/${conversation.id}`}
-                        onClick={onNavigate}
-                        aria-current={active ? "page" : undefined}
-                        className={cn(
-                          "block truncate rounded-lg px-2.5 py-1.5 text-sm transition-colors",
-                          active
-                            ? "bg-accent font-medium text-foreground"
-                            : "text-muted-foreground hover:bg-accent/60 hover:text-foreground",
-                        )}
-                        dir="auto"
-                      >
-                        {conversation.title || t("untitled")}
-                      </Link>
-                    </li>
-                  );
-                })}
+                {conversations.slice(0, 30).map((conversation) => (
+                  <RecentChat
+                    key={conversation.id}
+                    conversation={conversation}
+                    active={conversation.id === activeChat}
+                    onNavigate={onNavigate}
+                    onDelete={setPendingDelete}
+                  />
+                ))}
               </ul>
             )}
           </div>
@@ -171,7 +164,126 @@ export function AppSidebar({ collapsed = false, onToggleCollapsed, onNavigate }:
       <div className={cn("border-t p-2", collapsed && "flex justify-center")}>
         <UserMenu collapsed={collapsed} />
       </div>
+
+      <DeleteChatDialog
+        conversation={pendingDelete}
+        activeChat={activeChat}
+        onClose={() => setPendingDelete(null)}
+      />
     </div>
+  );
+}
+
+/** A recent-chat row. Its menu opens from the ⋯ button or a right-click. */
+function RecentChat({
+  conversation, active, onNavigate, onDelete,
+}: {
+  conversation: ConversationSummary;
+  active: boolean;
+  onNavigate?: () => void;
+  onDelete: (conversation: ConversationSummary) => void;
+}) {
+  const { t } = useLocale();
+  const [menuOpen, setMenuOpen] = useState(false);
+
+  return (
+    <li className="group/chat relative">
+      <Link
+        href={`/chat/${conversation.id}`}
+        onClick={onNavigate}
+        onContextMenu={(event) => {
+          event.preventDefault();
+          setMenuOpen(true);
+        }}
+        aria-current={active ? "page" : undefined}
+        className={cn(
+          "block truncate rounded-lg py-1.5 pe-8 ps-2.5 text-sm transition-colors",
+          active || menuOpen
+            ? "bg-accent font-medium text-foreground"
+            : "text-muted-foreground hover:bg-accent/60 hover:text-foreground",
+        )}
+        dir="auto"
+      >
+        {conversation.title || t("untitled")}
+      </Link>
+      {/* Not modal: its item opens a dialog, and a modal menu closing
+          underneath a dialog opening can leave the page unclickable. */}
+      <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen} modal={false}>
+        <DropdownMenuTrigger asChild>
+          <button
+            type="button"
+            aria-label={t("chatOptions")}
+            className={cn(
+              "absolute end-1 top-1/2 grid size-6 -translate-y-1/2 place-items-center rounded-md text-muted-foreground transition-opacity",
+              "hover:bg-background/60 hover:text-foreground focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+              // Always visible on touch screens, which have no hover.
+              "opacity-0 group-hover/chat:opacity-100 data-[state=open]:opacity-100 [@media(hover:none)]:opacity-100",
+            )}
+          >
+            <Ellipsis className="size-4" />
+          </button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="start" className="w-44">
+          <DropdownMenuItem destructive onSelect={() => onDelete(conversation)}>
+            <Trash2 /> {t("deleteChat")}
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </li>
+  );
+}
+
+function DeleteChatDialog({
+  conversation, activeChat, onClose,
+}: {
+  conversation: ConversationSummary | null;
+  activeChat: string | null;
+  onClose: () => void;
+}) {
+  const { t } = useLocale();
+  const router = useRouter();
+  const queryClient = useQueryClient();
+  const [deleting, setDeleting] = useState(false);
+
+  async function confirm() {
+    if (!conversation) return;
+    const id = conversation.id;
+    setDeleting(true);
+    try {
+      await deleteConversation(id);
+      queryClient.setQueryData<{ results: ConversationSummary[] }>(["conversations"], (old) =>
+        old && { ...old, results: old.results.filter((c) => c.id !== id) },
+      );
+      queryClient.removeQueries({ queryKey: ["conversation", id] });
+      // Leave the chat before it disappears from under the open page.
+      if (id === activeChat) router.push("/chat");
+      toast.success(t("chatDeleted"));
+      onClose();
+    } catch (error) {
+      toast.error(t("deleteChatFailed"), { description: error instanceof Error ? error.message : undefined });
+    } finally {
+      setDeleting(false);
+      void queryClient.invalidateQueries({ queryKey: ["conversations"] });
+    }
+  }
+
+  return (
+    <Dialog open={conversation !== null} onOpenChange={(open) => !open && !deleting && onClose()}>
+      <DialogContent className="max-w-md" closeLabel={t("close")}>
+        <DialogHeader>
+          <DialogTitle>{t("deleteChatTitle")}</DialogTitle>
+          <DialogDescription dir="auto">
+            {fmt(t("deleteChatBody"), { title: conversation?.title || t("untitled") })}
+          </DialogDescription>
+        </DialogHeader>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose} disabled={deleting}>{t("cancel")}</Button>
+          <Button variant="destructive" onClick={() => void confirm()} disabled={deleting}>
+            <Trash2 /> {t("deleteAction")}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 

@@ -219,6 +219,29 @@ export interface ChatAttachment {
   preview_url: string | null;
 }
 
+/** A file General-mode code produced: a chart, spreadsheet, Word or PowerPoint file. */
+export interface GeneratedFile {
+  id: string;
+  filename: string;
+  kind: "image" | "document" | "spreadsheet" | "presentation" | "data";
+  mime: string;
+  size: number;
+  /** Raster images render in the page; everything else is a download. */
+  inline: boolean;
+  url: string;
+}
+
+/** One run_python call: the code, what it printed, and the files it saved. */
+export interface CodeRun {
+  name: "run_python";
+  code: string;
+  ok: boolean;
+  stdout: string;
+  stderr: string;
+  duration_ms: number | null;
+  file_ids: string[];
+}
+
 /** What a finished deep-think / deep-research run did, stored with the answer. */
 export interface PhaseSummary {
   steps: string[];
@@ -256,6 +279,8 @@ export interface ConversationMessage {
   follow_ups: string[];
   phases: PhaseSummary | null;
   attachments: ChatAttachment[];
+  files: GeneratedFile[];
+  tool_calls: CodeRun[];
   is_partial: boolean;
   error: string;
 }
@@ -377,6 +402,10 @@ export const enrich = (documentId: string, mode = "auto", requiredFields: unknow
 export const getMetadata = (documentId: string) =>
   api<any>(`/api/documents/${documentId}/metadata/`);
 
+/** Deletes the chat with its messages, files and the agent's memory of it. */
+export const deleteConversation = (conversationId: string) =>
+  api<void>(`/api/conversations/${conversationId}/`, { method: "DELETE" });
+
 export const createConversation = (scope: "all" | "selected", documentIds: string[] = []) =>
   api<ConversationDetail>("/api/conversations/", {
     method: "POST",
@@ -440,3 +469,5 @@ export const deleteAttachment = (id: string) =>
 
 export const attachmentPreviewUrl = (attachment: ChatAttachment) =>
   attachment.preview_url ? `${API_BASE}${attachment.preview_url}` : null;
+
+export const generatedFileUrl = (file: GeneratedFile) => `${API_BASE}${file.url}`;

@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+from django.db import transaction
 from rest_framework import serializers, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
 
 from chat.attachments import serialize as serialize_attachment
+from chat.code_tools import serialize_file
 from chat.models import Conversation, Message
 from chat.research import DEFAULT_CHAT_MODE
 from common.ownership import CHAT_READY_STATUSES, owned_documents
@@ -16,13 +18,14 @@ class MessageSerializer(serializers.ModelSerializer):
     follow_ups = serializers.SerializerMethodField()
     phases = serializers.SerializerMethodField()
     attachments = serializers.SerializerMethodField()
+    files = serializers.SerializerMethodField()
 
     class Meta:
         model = Message
         fields = [
             "seq", "role", "content", "tool_calls", "citations", "citation_mode",
             "chat_mode", "thinking", "reasoning", "thinking_ms", "follow_ups", "phases",
-            "attachments", "latency_ms", "model_id", "is_partial", "error", "created_at",
+            "attachments", "files", "latency_ms", "model_id", "is_partial", "error", "created_at",
         ]
 
     def get_chat_mode(self, obj) -> str:
@@ -39,6 +42,9 @@ class MessageSerializer(serializers.ModelSerializer):
 
     def get_attachments(self, obj) -> list[dict]:
         return [serialize_attachment(a) for a in obj.attachments.all()]
+
+    def get_files(self, obj) -> list[dict]:
+        return [serialize_file(f) for f in obj.files.all()]
 
 
 class ConversationSerializer(serializers.ModelSerializer):
@@ -117,13 +123,22 @@ class ConversationDetailSerializer(ConversationSerializer):
 
 
 class ConversationViewSet(viewsets.ModelViewSet):
-    queryset = Conversation.objects.prefetch_related("messages__attachments").all()
+    queryset = Conversation.objects.prefetch_related("messages__attachments", "messages__files").all()
 
     def get_queryset(self):
         return super().get_queryset().filter(owner=self.request.user)
 
     def perform_create(self, serializer):
         serializer.save(owner=self.request.user)
+
+    def perform_destroy(self, instance):
+        from chat.checkpointer import delete_thread
+
+        # Messages, attachments and generated files cascade (their files on
+        # disk go via chat/signals.py); the agent's memory is erased here.
+        with transaction.atomic():
+            delete_thread(instance.thread_id)
+            instance.delete()
 
     def get_serializer_class(self):
         return (
@@ -133,4 +148,5 @@ class ConversationViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=["get"])
     def messages(self, request, pk=None):
         conversation = self.get_object()
-        return Response(MessageSerializer(conversation.messages.all(), many=True).data)
+        messages = conversation.messages.prefetch_related("attachments", "files")
+        return Response(MessageSerializer(messages, many=True).data)

@@ -1,4 +1,4 @@
-.PHONY: help up down build logs migrate warmup smoke test seed createuser claim shell psql clean ps
+.PHONY: help up down build logs migrate warmup smoke test test-runner seed createuser claim shell psql clean ps
 
 COMPOSE := docker compose
 
@@ -35,6 +35,9 @@ smoke:  ## Prove the whole pipeline end to end
 
 test:   ## Run the backend test suite
 	$(COMPOSE) run --rm -e DJANGO_SETTINGS_MODULE=config.settings.test backend pytest -v
+
+test-runner: ## Test the code-execution sandbox, inside its own image
+	$(COMPOSE) run --rm --no-deps -v ./docker/code-runner:/src:ro code-runner python -m unittest discover -s /src -v
 
 fixtures: ## Generate the bilingual test PDFs
 	$(COMPOSE) run --rm backend python tests/fixtures/make_test_pdf.py

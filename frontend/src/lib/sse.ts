@@ -1,5 +1,5 @@
 import {
-  API_BASE, ChatMode, ResearchMode, ThinkingMode, authHeaders, notifyUnauthorized,
+  API_BASE, ChatMode, CodeRun, GeneratedFile, ResearchMode, ThinkingMode, authHeaders, notifyUnauthorized,
 } from "./api";
 
 /**
@@ -47,6 +47,8 @@ export interface StreamHandlers {
   onPhase?: (phase: PhaseEvent) => void;
   onToolStart?: (name: string, args: unknown, phase?: string) => void;
   onToolEnd?: (name: string, hits: number) => void;
+  /** General mode ran code: its output and the files it saved. */
+  onCodeRun?: (run: CodeRunEvent) => void;
   onDone?: (payload: any) => void;
   onError?: (detail: string) => void;
 }
@@ -66,6 +68,10 @@ export interface PhaseEvent {
   answered?: number;
   sources?: number;
   queries?: number;
+}
+
+export interface CodeRunEvent extends CodeRun {
+  files: GeneratedFile[];
 }
 
 export interface TurnOptions {
@@ -157,6 +163,7 @@ export async function streamChat(
         case "phase": handlers.onPhase?.(payload); break;
         case "tool_start": handlers.onToolStart?.(payload.name, payload.args, payload.phase); break;
         case "tool_end": handlers.onToolEnd?.(payload.name, payload.hits); break;
+        case "code_run": handlers.onCodeRun?.(payload); break;
         case "done": handlers.onDone?.(payload); break;
         case "error": handlers.onError?.(payload.detail); break;
       }

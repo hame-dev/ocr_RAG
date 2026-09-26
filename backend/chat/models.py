@@ -112,3 +112,39 @@ class ChatAttachment(models.Model):
 
     class Meta:
         ordering = ["created_at"]
+
+
+class GeneratedFile(models.Model):
+    """A file General-mode code produced: a chart, spreadsheet, Word or PowerPoint file.
+
+    Created by the run_python tool while the answer is being written (so
+    unbound), then bound to the assistant message that answer became.
+    """
+
+    KINDS = [
+        ("image", "Image"),
+        ("document", "Document"),
+        ("spreadsheet", "Spreadsheet"),
+        ("presentation", "Presentation"),
+        ("data", "Data"),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    owner = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="generated_files"
+    )
+    conversation = models.ForeignKey(
+        Conversation, on_delete=models.CASCADE, related_name="generated_files"
+    )
+    message = models.ForeignKey(
+        Message, null=True, blank=True, on_delete=models.SET_NULL, related_name="files"
+    )
+    kind = models.CharField(max_length=16, choices=KINDS)
+    filename = models.CharField(max_length=255)
+    mime = models.CharField(max_length=128)
+    size = models.BigIntegerField(default=0)
+    storage_path = models.CharField(max_length=1024)
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        ordering = ["created_at"]

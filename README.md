@@ -48,9 +48,25 @@ the agent is allowed before it must answer.
 ![Chat entry point with source scoping and research depth](assets/chat_screen.png)
 
 **Or just talk to the model.** A **Documents / General** switch in the composer
-picks the mode per message. General mode is the plain LLM: no tools, no search,
-no citations, and no access to your library, which is useful for drafting,
-translating or general questions without leaving the conversation.
+picks the mode per message. General mode has no search, no citations and no
+access to your library, which is useful for drafting, translating or general
+questions without leaving the conversation.
+
+**General mode runs code.** In General mode (Instant and Think) the model has one
+tool, `run_python`, so it computes answers instead of guessing them: arithmetic,
+percentages, statistics, algebra with sympy, matrices with numpy. It also draws
+charts with matplotlib, which appear inline, and creates **Excel, Word and
+PowerPoint** files (openpyxl, python-docx, python-pptx), which appear as
+downloads. Each run is shown as a collapsible "Ran code" panel with the code and
+its output. If a script fails, the model reads the error and tries again, up to
+4 runs per turn.
+
+The code runs in the `code-runner` sidecar, never in the backend. That container
+sits on an internal-only Docker network (no internet, and no route to the
+database, Redis or the media volume). It runs as a non-root user with a read-only
+filesystem and no capabilities, and each job gets a fresh directory and hard
+limits: 30 s, 1 GB of memory, 25 MB per file. Documents mode cannot run code at
+all, because its tool node does not have the tool.
 
 **Private accounts.** Every user signs in and sees only their own documents and
 chats. Retrieval, the agent's tools and every endpoint are scoped to the owner.
@@ -89,6 +105,7 @@ accounts: `make createuser U=alice` (prompts for a password; add STAFF=1 for sta
 ```bash
 make fixtures  # generate the bilingual test PDFs
 make test      # backend test suite
+make test-runner  # code-execution sandbox tests, run inside its own image
 SMOKE_USERNAME=alice SMOKE_PASSWORD=... make smoke   # full live pipeline, ~1–2 min
 ```
 
@@ -107,6 +124,7 @@ minutes instead of seconds.
 Browser ──SSE──> Django (ASGI/uvicorn) ──> Postgres 17 + pgvector
    │                  │                        └─ documents, chunks, langgraph checkpoints
    │                  ├──> Redis ──> Celery (queues: ocr_cpu, llm=1, index)
+   │                  ├──> code-runner (internal network only; General mode's run_python)
    │                  └──> host.docker.internal:11434 ──> Ollama (Metal GPU)
    └──> Next.js 15                                          qwen3.5:9b, bge-m3, surya-ocr-2
 ```

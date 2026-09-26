@@ -44,9 +44,9 @@ def _events(raw: str) -> dict[str, dict]:
     return events
 
 
-def _fake_llm(calls: list[bool], reply: str = "Paris."):
-    def factory(*, with_tools: bool = True, final: bool = False, **_):
-        calls.append(with_tools)
+def _fake_llm(calls: list, reply: str = "Paris."):
+    def factory(*, with_tools: bool = True, final: bool = False, tools=None, **_):
+        calls.append([t.name for t in tools] if with_tools and tools is not None else with_tools)
         model = GenericFakeChatModel(messages=iter([AIMessage(content=reply)]))
         return model.with_config(tags=[chat_graph.FINAL_ANSWER_TAG]) if final else model
 
@@ -61,8 +61,8 @@ def test_chat_mode_normalization():
 
 
 @pytest.mark.asyncio
-async def test_general_mode_uses_the_plain_llm_without_tools(monkeypatch):
-    calls: list[bool] = []
+async def test_general_mode_binds_only_the_general_tools(monkeypatch):
+    calls: list = []
     seen_prompts: list[str] = []
 
     class RecordingModel(GenericFakeChatModel):
@@ -70,8 +70,8 @@ async def test_general_mode_uses_the_plain_llm_without_tools(monkeypatch):
             seen_prompts.append(messages[0].content)
             return await super().ainvoke(messages, *args, **kwargs)
 
-    def factory(*, with_tools: bool = True, **_):
-        calls.append(with_tools)
+    def factory(*, with_tools: bool = True, tools=None, **_):
+        calls.append([t.name for t in tools] if with_tools and tools is not None else with_tools)
         return RecordingModel(messages=iter([AIMessage(content="Paris.")]))
 
     monkeypatch.setattr(chat_graph, "_llm", factory)
@@ -80,8 +80,10 @@ async def test_general_mode_uses_the_plain_llm_without_tools(monkeypatch):
         {"messages": [HumanMessage(content="hi")], "chat_mode": "general"}
     )
 
-    assert calls == [False]
-    assert seen_prompts == [chat_graph.GENERAL_SYSTEM_PROMPT]
+    # Only run_python: never the document tools.
+    assert calls == [["run_python"]]
+    assert seen_prompts == [chat_graph.general_system_prompt({})]
+    assert "run_python" in seen_prompts[0]
     # No tool calls, so the graph ends the turn instead of routing to tools.
     assert chat_graph._route({"messages": result["messages"]}) == "finalize"
 
@@ -109,7 +111,7 @@ def test_general_mode_turn_is_streamed_and_recorded(auth_client, user, monkeypat
     assert done["content"] == "Paris is the capital."
     assert done["citations"] == []
     assert done["chat_mode"] == "general"
-    assert calls == [False]
+    assert calls == [["run_python"]]
 
     assistant = Message.objects.get(conversation=conversation, role="assistant")
     assert assistant.usage["chat_mode"] == "general"

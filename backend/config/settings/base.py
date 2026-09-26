@@ -174,6 +174,11 @@ EMBED_DIMS = int(os.environ.get("EMBED_DIMS", "1024"))
 # The 262k context these models advertise does not fit in 32GB of KV cache.
 LLM_NUM_CTX = int(os.environ.get("LLM_NUM_CTX", "16384"))
 
+# ---- General chat code runner ---------------------------------------------------
+# Sandboxed sidecar (docker/code-runner) for the Python General chat writes.
+CODE_RUNNER_URL = os.environ.get("CODE_RUNNER_URL", "http://code-runner:8090")
+CODE_RUN_TIMEOUT_S = int(os.environ.get("CODE_RUN_TIMEOUT_S", "30"))
+
 # ---- OCR --------------------------------------------------------------------
 EASYOCR_URL = os.environ.get("EASYOCR_URL", "http://ocr-easyocr:8081")
 PADDLE_URL = os.environ.get("PADDLE_URL", "http://ocr-paddle:8082")

@@ -4,10 +4,11 @@ import { memo, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { usePathname } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  AlertCircle, ArrowUpRight, BookOpenText, Check, Copy, FileText, Library, RotateCw, Sparkles,
+  AlertCircle, ArrowUpRight, BookOpenText, Check, Copy, FileText, Library, RotateCw, Sparkles, SquareTerminal,
+  type LucideIcon,
 } from "lucide-react";
 import {
-  API_BASE, ChatAttachment, ChatMode, Citation, ConversationDetail, PhaseSummary, ResearchMode,
+  API_BASE, ChatAttachment, ChatMode, Citation, CodeRun, ConversationDetail, GeneratedFile, PhaseSummary, ResearchMode,
   SelectedDocument, ThinkingMode, api, createConversation, updateConversationScope,
 } from "@/lib/api";
 import { fmt, num, StringKey } from "@/lib/i18n";
@@ -19,6 +20,8 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger, Hint } from "@/components/ui/tooltip";
 import { BrandMark } from "./app-shell/AppSidebar";
 import { AttachmentList } from "./chat/AttachmentList";
+import { CodeRunPanel } from "./chat/CodeRunPanel";
+import { GeneratedFiles } from "./chat/GeneratedFiles";
 import { ResearchProgress } from "./chat/ResearchProgress";
 import { ThinkingPanel } from "./chat/ThinkingPanel";
 import { ChatComposer, OutgoingTurn } from "./ChatComposer";
@@ -47,6 +50,9 @@ interface DisplayMessage {
   phases?: PhaseEvent[];
   phaseSummary?: PhaseSummary | null;
   followUps?: string[];
+  /** General mode's code runs, and the charts / files they produced. */
+  codeRuns?: CodeRun[];
+  files?: GeneratedFile[];
 }
 
 interface Turn {
@@ -60,6 +66,15 @@ interface Turn {
 const SUGGESTIONS: Record<ChatMode, StringKey[]> = {
   documents: ["suggestDoc1", "suggestDoc2", "suggestDoc3"],
   general: ["suggestGen1", "suggestGen2", "suggestGen3"],
+};
+
+// The chip shown while a tool runs, by the phase the server reports for it.
+const TOOL_PHASES: Record<string, { label: StringKey; icon: LucideIcon }> = {
+  searching: { label: "searching", icon: BookOpenText },
+  comparing: { label: "comparingSources", icon: BookOpenText },
+  verifying: { label: "verifyingEvidence", icon: BookOpenText },
+  reviewing: { label: "reviewingSources", icon: BookOpenText },
+  running_code: { label: "runningCode", icon: SquareTerminal },
 };
 
 // Strong ease-in-out for on-screen movement (the composer travelling from the
@@ -80,6 +95,7 @@ export function ChatWorkspace({ conversationId }: { conversationId?: string }) {
   const [messages, setMessages] = useState<DisplayMessage[]>([]);
   const [selectedSources, setSelectedSources] = useState<SelectedDocument[]>([]);
   const [streaming, setStreaming] = useState(false);
+  /** The running tool's phase id (a TOOL_PHASES key), or null. */
   const [toolPhase, setToolPhase] = useState<string | null>(null);
   const [sourceError, setSourceError] = useState<string | null>(null);
   const [composerMode, setComposerMode] = useState<ChatMode>("documents");
@@ -151,6 +167,8 @@ export function ChatWorkspace({ conversationId }: { conversationId?: string }) {
           thinkingMs: message.thinking_ms,
           phaseSummary: message.phases,
           followUps: message.follow_ups,
+          codeRuns: message.tool_calls,
+          files: message.files,
         })),
     );
     setSelectedSources(conversation.selected_documents ?? []);
@@ -322,8 +340,16 @@ export function ChatWorkspace({ conversationId }: { conversationId?: string }) {
           dropBuffer();
           updateLast((last) => ({ ...last, content: "" }));
         },
-        onToolStart: (_name, _args, phase) => setToolPhase(phaseLabel(phase)),
+        onToolStart: (_name, _args, phase) => setToolPhase(phase ?? "searching"),
         onToolEnd: () => setToolPhase(null),
+        onCodeRun: ({ files, ...run }) => {
+          setToolPhase(null);
+          updateLast((last) => ({
+            ...last,
+            codeRuns: [...(last.codeRuns ?? []), run],
+            files: [...(last.files ?? []), ...files],
+          }));
+        },
         onDone: (payload) => {
           dropBuffer();
           setToolPhase(null);
@@ -336,6 +362,8 @@ export function ChatWorkspace({ conversationId }: { conversationId?: string }) {
             thinkingMs: payload.thinking_ms,
             phaseSummary: payload.phases,
             followUps: payload.follow_ups ?? [],
+            codeRuns: payload.tool_calls ?? last.codeRuns,
+            files: payload.files ?? last.files,
             pending: false,
           }));
         },
@@ -374,13 +402,6 @@ export function ChatWorkspace({ conversationId }: { conversationId?: string }) {
     if (!turn) return;
     appendTurn(turn.content, turn);
     void streamTurn(activeId, turn);
-  }
-
-  function phaseLabel(phase?: string) {
-    if (phase === "comparing") return t("comparingSources");
-    if (phase === "verifying") return t("verifyingEvidence");
-    if (phase === "reviewing") return t("reviewingSources");
-    return t("searching");
   }
 
   const loading = Boolean(activeId) && conversationQuery.isPending;
@@ -536,6 +557,7 @@ const AssistantMessage = memo(function AssistantMessage({
   const hasPhases = Boolean(message.phases?.length || message.phaseSummary);
   const thinkingLive = Boolean(message.pending && !message.content && message.reasoning);
   const waiting = message.pending && !message.content && !message.reasoning && !message.phases?.length;
+  const toolChip = toolPhase ? TOOL_PHASES[toolPhase] ?? TOOL_PHASES.searching : null;
 
   return (
     <article className={cn("group flex gap-3", message.fresh && "animate-message-in")}>
@@ -567,10 +589,12 @@ const AssistantMessage = memo(function AssistantMessage({
           />
         ) : null}
 
-        {toolPhase ? (
+        {message.codeRuns?.map((run, index) => <CodeRunPanel key={index} run={run} />)}
+
+        {toolChip ? (
           <div className="inline-flex items-center gap-2 rounded-full border bg-card px-3 py-1.5 text-xs text-muted-foreground">
-            <BookOpenText className="size-3.5 animate-pulse text-primary" />
-            {toolPhase}
+            <toolChip.icon className="size-3.5 animate-pulse text-primary" />
+            {t(toolChip.label)}
           </div>
         ) : waiting ? (
           <div className="flex items-center gap-1 py-2" aria-label="…">
@@ -587,6 +611,8 @@ const AssistantMessage = memo(function AssistantMessage({
             {message.pending && <span className="md-cursor" aria-hidden />}
           </div>
         )}
+
+        {message.files && message.files.length > 0 && <GeneratedFiles files={message.files} />}
 
         {message.error && (
           <div className="flex flex-wrap items-center gap-3 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">

@@ -24,7 +24,8 @@ def test_think_streams_reasoning_separately_from_the_answer(auth_client, user, m
 
     assert response.status_code == 200
     assert script.calls == [
-        {"with_tools": False, "reasoning": True, "json": False, "final": True, "max_tokens": None}
+        {"with_tools": True, "reasoning": True, "json": False, "final": True, "max_tokens": None,
+         "tools": ["run_python"]}
     ]
     thinking = "".join(data["t"] for name, data in events if name == "thinking")
     assert thinking == "17 times 3 is 51."

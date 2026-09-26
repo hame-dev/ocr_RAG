@@ -5,8 +5,8 @@ import { FileText } from "lucide-react";
 import { ChatAttachment, attachmentPreviewUrl } from "@/lib/api";
 import { bytes, pages } from "@/lib/format";
 import { cn } from "@/lib/utils";
-import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { useLocale } from "../Providers";
+import { ImageLightbox } from "./ImageLightbox";
 
 /** Files sent with a user message: image thumbnails (open a lightbox) and file chips. */
 export function AttachmentList({ attachments, className }: { attachments: ChatAttachment[]; className?: string }) {
@@ -52,19 +52,10 @@ export function AttachmentList({ attachments, className }: { attachments: ChatAt
         );
       })}
 
-      <Dialog open={open !== null} onOpenChange={(value) => !value && setOpen(null)}>
-        <DialogContent className="max-w-4xl p-3" closeLabel={t("close")}>
-          <DialogTitle className="truncate px-1 pe-10 text-sm font-medium" dir="auto">{open?.filename}</DialogTitle>
-          {open && attachmentPreviewUrl(open) && (
-            // eslint-disable-next-line @next/next/no-img-element -- authenticated API image
-            <img
-              src={attachmentPreviewUrl(open)!}
-              alt={open.filename}
-              className="max-h-[75vh] w-full rounded-lg object-contain"
-            />
-          )}
-        </DialogContent>
-      </Dialog>
+      <ImageLightbox
+        image={open && attachmentPreviewUrl(open) ? { src: attachmentPreviewUrl(open)!, title: open.filename } : null}
+        onClose={() => setOpen(null)}
+      />
     </div>
   );
 }

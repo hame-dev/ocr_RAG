@@ -1,8 +1,13 @@
 """The ReAct agent.
 
-    START -> prepare -> agent <-> tools -> finalize -> END
+    START -> prepare -> agent <-> tools ---------> finalize -> END   (Documents)
+                     |        <-> general_tools                     (General: run_python)
                      +-> deep_think ------------+      (General, "Deep think")
                      +-> deep_research ---------+      (Documents, "Deep research")
+
+The two tool nodes are separate on purpose: each only knows its own mode's
+tools, so a Documents turn can never execute code, and a General turn can never
+reach the library.
 
 `prepare` bounds the context window before every turn. On a 32GB machine that is
 a stability requirement, not an optimization: an unbounded message list will
@@ -26,6 +31,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode, tools_condition
 
+from chat.code_tools import GENERAL_TOOLS
 from chat.deep_research import deep_research
 from chat.deep_think import deep_think
 from chat.pipeline import text_of
@@ -35,6 +41,8 @@ from chat.tools import TOOLS
 logger = logging.getLogger(__name__)
 
 SUMMARIZE_AFTER_MESSAGES = 20
+# Code runs per General turn: enough to fix a failed script and try again.
+GENERAL_MAX_TOOL_ROUNDS = 4
 
 SYSTEM_PROMPT = """You are a research assistant for a personal document library. \
 The documents were scanned and read by OCR, so the text may contain small errors.
@@ -66,8 +74,66 @@ unsure rather than guessing.
 their own documents or files, say that you cannot see them here and suggest switching to \
 Documents mode.
 - Never write citation markers such as [[cite:...]].
-- When the user asks for a graph, diagram, flow, timeline or relationship map, you may include
-a valid fenced ```mermaid diagram with concise labels, no HTML and no external links."""
+- When the user asks for a flow, timeline or relationship diagram, you may include
+a valid fenced ```mermaid diagram with concise labels, no HTML and no external links.
+{tools_note}"""
+
+GENERAL_TOOLS_NOTE = """
+Tools:
+- You have a `run_python` tool that runs Python in a sandbox. Use it for ANY calculation \
+(arithmetic, percentages, statistics, algebra, equations, calculus, matrices) instead of \
+working numbers out in your head, for charts and plots of data, and whenever the user wants \
+an Excel (.xlsx), Word (.docx) or PowerPoint (.pptx) file.
+- Libraries: math, statistics, numpy, scipy, sympy, pandas, matplotlib, openpyxl, \
+python-docx (import docx), python-pptx (import pptx), arabic_reshaper and bidi.
+- print() every result you need. Save files in the current directory with a short \
+descriptive filename; use plt.savefig(...), never plt.show().
+- For Arabic text in a matplotlib chart, reshape it first: \
+bidi.algorithm.get_display(arabic_reshaper.reshape(text)), and use the "Noto Sans Arabic" font.
+- If the code fails, read the error, fix the code and run it again.
+- Saved files are shown to the user automatically below your answer: never paste their \
+contents, base64 or links. After running, state the results and briefly describe any file. \
+Only describe formatting your code actually applied.
+- Do not use the tool for questions that need no computation or file.
+
+Correct API patterns (copy them; colours are hex without #):
+```python
+# Excel: header text colour is Font(color=...), background is PatternFill
+from openpyxl import Workbook
+from openpyxl.styles import Font, PatternFill
+wb = Workbook(); ws = wb.active; ws.append(["Name", "Score"]); ws.append(["Alice", 90])
+for cell in ws[1]:
+    cell.font = Font(bold=True, color="FFFFFF")
+    cell.fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
+ws.column_dimensions["A"].width = 20
+wb.save("scores.xlsx")
+
+# Word
+from docx import Document
+from docx.shared import Pt, RGBColor
+doc = Document(); doc.add_heading("Title", level=1)
+p = doc.add_paragraph("Text."); run = p.add_run(" Bold red."); run.bold = True
+run.font.size = Pt(14); run.font.color.rgb = RGBColor(0xC0, 0x00, 0x00)
+table = doc.add_table(rows=2, cols=2); table.style = "Table Grid"; table.cell(0, 0).text = "Header"
+doc.save("report.docx")
+
+# PowerPoint: layout 0 = title, 1 = title + bullets, 6 = blank
+from pptx import Presentation
+from pptx.util import Inches, Pt
+from pptx.dml.color import RGBColor
+prs = Presentation(); slide = prs.slides.add_slide(prs.slide_layouts[1])
+slide.shapes.title.text = "Title"; slide.placeholders[1].text_frame.text = "First bullet"
+slide.placeholders[1].text_frame.add_paragraph().text = "Second bullet"
+slide.shapes.title.text_frame.paragraphs[0].font.color.rgb = RGBColor(0x1F, 0x4E, 0x79)
+blank = prs.slides.add_slide(prs.slide_layouts[6])
+blank.shapes.add_textbox(Inches(1), Inches(1), Inches(6), Inches(1)).text_frame.text = "Text box"
+prs.save("deck.pptx")
+
+# Chart
+import matplotlib.pyplot as plt
+fig, ax = plt.subplots(figsize=(8, 5)); ax.bar(["A", "B"], [10, 24], color="#4472C4")
+ax.set_title("Title"); fig.tight_layout(); fig.savefig("chart.png", dpi=150)
+```"""
 
 SCOPE_ALL = "\nYou are searching the user's entire document library."
 SCOPE_SELECTED = (
@@ -82,6 +148,9 @@ THINK_RE = re.compile(r"<think>.*?</think>", re.S)
 class AgentState(TypedDict):
     messages: Annotated[list[AnyMessage], add_messages]
     doc_ids: list[str] | None
+    # Who the turn belongs to, for tools that save files (run_python).
+    user_id: int | None
+    conversation_id: str | None
     scope_note: str
     research_mode: str
     chat_mode: str
@@ -104,8 +173,11 @@ def _llm(
     json: bool = False,
     final: bool = False,
     max_tokens: int | None = None,
+    tools: list | None = None,
 ):
     """The chat model.
+
+    tools: what to bind when with_tools is on; the Documents tools by default.
 
     reasoning: qwen's thinking. langchain-ollama returns it separately in
         additional_kwargs["reasoning_content"], so it never mixes into the
@@ -125,7 +197,7 @@ def _llm(
         **({"format": "json"} if json else {}),
         **({"num_predict": max_tokens} if max_tokens else {}),
     )
-    runnable = model.bind_tools(TOOLS) if with_tools else model
+    runnable = model.bind_tools(TOOLS if tools is None else tools) if with_tools else model
     return runnable.with_config(tags=[FINAL_ANSWER_TAG]) if final else runnable
 
 
@@ -207,19 +279,22 @@ async def agent(state: AgentState) -> dict:
     return {"messages": [response]}
 
 
+def general_system_prompt(state: AgentState, *, tools: bool = True) -> str:
+    system = GENERAL_SYSTEM_PROMPT.format(tools_note=GENERAL_TOOLS_NOTE if tools else "")
+    if summary := state.get("summary"):
+        system += f"\n\nEarlier in this conversation:\n{summary}"
+    return system
+
+
 async def _general_answer(state: AgentState) -> dict:
-    """Plain LLM turn: no tools are bound, so _route always ends the turn.
+    """General turn: no library access, only the General tools (run_python).
 
     "Think" turns on the model's own reasoning; it streams to the UI as
     `thinking` events and is kept out of the answer text.
     """
-    system = GENERAL_SYSTEM_PROMPT
-    if summary := state.get("summary"):
-        system += f"\n\nEarlier in this conversation:\n{summary}"
-
-    messages = [SystemMessage(content=system)] + list(state["messages"])
+    messages = [SystemMessage(content=general_system_prompt(state))] + list(state["messages"])
     thinking = state.get("thinking") == "think"
-    response = await _llm(with_tools=False, reasoning=thinking, final=True).ainvoke(messages)
+    response = await _llm(tools=GENERAL_TOOLS, reasoning=thinking, final=True).ainvoke(messages)
     return {"messages": [response]}
 
 
@@ -237,8 +312,14 @@ def _route(state: AgentState) -> str:
     if not wants_tool:
         return "finalize"
 
-    # Each profile has a deterministic cap. If the model asks for another tool
+    # Each mode has a deterministic cap. If the model asks for another tool
     # at the cap, a tool-free model turn must still produce a useful answer.
+    if state.get("chat_mode") == "general":
+        if state.get("tool_rounds", 0) >= GENERAL_MAX_TOOL_ROUNDS:
+            logger.info("general tool cap reached; forcing answer")
+            return "force_answer"
+        return "general_tools"
+
     profile = research_profile(state.get("research_mode", DEFAULT_RESEARCH_MODE))
     if state.get("tool_rounds", 0) >= profile["max_tool_rounds"]:
         logger.info("%s research cap reached; forcing answer", state.get("research_mode"))
@@ -247,15 +328,22 @@ def _route(state: AgentState) -> str:
 
 
 async def force_answer(state: AgentState) -> dict:
-    """Produce a final cited response instead of ending on an unexecuted tool call."""
-    system = SYSTEM_PROMPT.format(scope_note=state.get("scope_note", SCOPE_ALL))
-    system += (
-        "\n\nThe research budget is exhausted. Do not request more tools. Answer now "
-        "using only the evidence already returned, retain exact figures, and include "
-        "the required citation markers."
-    )
-    if summary := state.get("summary"):
-        system += f"\n\nEarlier in this conversation:\n{summary}"
+    """Produce a final response instead of ending on an unexecuted tool call."""
+    if state.get("chat_mode") == "general":
+        system = general_system_prompt(state, tools=False) + (
+            "\n\nThe code-run budget for this turn is exhausted. Do not request more tools. "
+            "Answer now from the results already returned, and say plainly if something "
+            "could not be completed."
+        )
+    else:
+        system = SYSTEM_PROMPT.format(scope_note=state.get("scope_note", SCOPE_ALL))
+        system += (
+            "\n\nThe research budget is exhausted. Do not request more tools. Answer now "
+            "using only the evidence already returned, retain exact figures, and include "
+            "the required citation markers."
+        )
+        if summary := state.get("summary"):
+            system += f"\n\nEarlier in this conversation:\n{summary}"
 
     history = list(state["messages"])
     if history and getattr(history[-1], "tool_calls", None):
@@ -299,6 +387,7 @@ def build_graph(checkpointer=None):
     graph.add_node("prepare", prepare)
     graph.add_node("agent", agent)
     graph.add_node("tools", ToolNode(TOOLS, handle_tool_errors=True))
+    graph.add_node("general_tools", ToolNode(GENERAL_TOOLS, handle_tool_errors=True))
     graph.add_node("collect", collect)
     graph.add_node("force_answer", force_answer)
     graph.add_node("deep_think", deep_think)
@@ -316,9 +405,15 @@ def build_graph(checkpointer=None):
     graph.add_conditional_edges(
         "agent",
         _route,
-        {"tools": "tools", "force_answer": "force_answer", "finalize": "finalize"},
+        {
+            "tools": "tools",
+            "general_tools": "general_tools",
+            "force_answer": "force_answer",
+            "finalize": "finalize",
+        },
     )
     graph.add_edge("tools", "collect")
+    graph.add_edge("general_tools", "collect")
     graph.add_edge("collect", "agent")
     graph.add_edge("force_answer", "finalize")
     graph.add_edge("finalize", END)

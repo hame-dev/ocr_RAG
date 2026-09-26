@@ -33,6 +33,8 @@ x-django-env: &django-env
   CHANDRA_BIN: ${CHANDRA_BIN:-chandra}
   CHANDRA_METHOD: ${CHANDRA_METHOD:-hf}
   CHANDRA_TIMEOUT_S: ${CHANDRA_TIMEOUT_S:-1800}
+  CODE_RUNNER_URL: ${CODE_RUNNER_URL:-http://code-runner:8090}
+  CODE_RUN_TIMEOUT_S: ${CODE_RUN_TIMEOUT_S:-30}
   PYTHONUNBUFFERED: "1"
 
 # host-gateway is required on Linux and harmless on macOS.
@@ -114,6 +116,8 @@ services:
       - "75"
     ports:
       - "8000:8000"
+    # `sandbox` reaches the code runner; `default` is everything else.
+    networks: [default, sandbox]
     depends_on:
       db: {condition: service_healthy}
       redis: {condition: service_healthy}
@@ -176,6 +180,30 @@ services:
       backend: {condition: service_started}
     mem_limit: 3g
 
+  # Runs the Python that General chat writes (maths, charts, Excel / Word /
+  # PowerPoint files). Only on the internal `sandbox` network, so the code has
+  # no internet and cannot reach the database, Redis or the media volume.
+  code-runner:
+    build:
+      context: ./docker/code-runner
+    networks: [sandbox]
+    # tini as PID 1 reaps the job processes the server kills.
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp:size=256m,mode=1777
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8090/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+    mem_limit: 1536m
+    cpus: 1
+    pids_limit: 128
+
   # ---- Optional engine sidecars ---------------------------------------------
   # EasyOCR: ~1.5GB torch dep tree, isolated so its size and OOM behaviour never
   # touch the main worker. Phase 2.
@@ -223,6 +251,12 @@ services:
     ports:
       - "11434:11434"
     mem_limit: 12g
+
+networks:
+  default:
+  # internal: no route out of the host, only container-to-container.
+  sandbox:
+    internal: true
 
 volumes:
   pgdata:

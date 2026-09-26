@@ -75,6 +75,26 @@ def get_checkpointer():
     return _checkpointer
 
 
+# LangGraph's tables, all keyed by thread_id (== Conversation.id).
+CHECKPOINT_TABLES = ("checkpoint_writes", "checkpoint_blobs", "checkpoints")
+
+
+def delete_thread(thread_id: str) -> None:
+    """Erase a conversation's agent memory.
+
+    Deleting the Conversation row alone would leave the whole chat, every
+    message and tool result, in these tables. Plain SQL over Django's own
+    connection, so it commits or rolls back with the row's deletion.
+    """
+    from django.db import connection
+
+    existing = set(connection.introspection.table_names())
+    with connection.cursor() as cursor:
+        for table in CHECKPOINT_TABLES:
+            if table in existing:  # absent until init_checkpointer has run (e.g. tests)
+                cursor.execute(f"DELETE FROM {table} WHERE thread_id = %s", [thread_id])
+
+
 def setup_sync():
     """One-time table creation. Run via `manage.py init_checkpointer`."""
     from langgraph.checkpoint.postgres import PostgresSaver
