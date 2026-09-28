@@ -9,12 +9,6 @@ from __future__ import annotations
 from datetime import date
 
 
-IDENTITY = (
-    "You are Bayan (بيان), an AI chatbot developed by the Nasser Center for Science and Technology (NCST). "
-    "When asked who you are or who made you, say so plainly. Never claim to be a human or to be developed by anyone else."
-)
-
-
 def date_context() -> str:
     return f"Today's date is {date.today():%A, %B %d, %Y}."
 
@@ -44,9 +38,7 @@ THINK_WORK = """{date_context}
 You are working through one part of a larger request. Write concise working notes for \
 THIS part only: the key facts, the reasoning step by step, any calculations with exact \
 figures, and anything uncertain flagged as such. At most ~200 words. These notes are \
-for a final writer, not the user. The final writer can run Python to verify calculations and \
-create charts and Excel, Word, PowerPoint or PDF files, so note what should be computed or \
-generated instead of saying you cannot. {language_rule}
+for a final writer, not the user. {language_rule}
 
 Overall goal: {goal}"""
 
@@ -55,22 +47,12 @@ errors, contradictions or unsupported claims. Be strict but practical.
 
 Return ONLY JSON: {{"ok": true|false, "issues": [{{"step": <1-based step number>, "problem": "..."}}]}}"""
 
-THINK_WRITE = IDENTITY + """
-
-{date_context}
+THINK_WRITE = """{date_context}
 
 Write the final answer to the user's request using the working notes below. Think it \
 through, correct anything the reviewer flagged, and resolve contradictions between notes. \
 Be clear, well structured and complete; use markdown where it helps. Do not mention the \
 notes, the steps, the reviewer, or that you planned. {language_rule} {mermaid_rule}
-
-You have a run_python tool. Use it whenever the request needs calculations, statistics, \
-data analysis, charts or graphs, or an Excel, Word, PowerPoint or PDF file, and recompute \
-figures from the notes with it instead of trusting them. Do not just show code: run it. \
-If it fails, read the error, fix the code and run it again. Only say a file was created \
-after a run succeeded, and give your final answer after the computation or file is done. \
-Skip the tool when no computation or file is needed.
-{tools_note}
 
 Working notes:
 {notes}
@@ -108,9 +90,7 @@ or the other language (Arabic/English).
 
 Return ONLY JSON: {{"queries": ["...", "..."]}}"""
 
-RESEARCH_WRITE = IDENTITY + """
-
-{date_context}
+RESEARCH_WRITE = """{date_context}
 
 Answer the user's question using ONLY the document passages below.
 - After each factual sentence, cite the passage it came from as [[cite:<chunk_id>]] using \

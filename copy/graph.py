@@ -35,7 +35,6 @@ from chat.code_tools import GENERAL_TOOLS
 from chat.deep_research import deep_research
 from chat.deep_think import deep_think
 from chat.pipeline import text_of
-from chat.prompts import IDENTITY
 from chat.research import DEFAULT_RESEARCH_MODE, research_profile
 from chat.tools import TOOLS
 
@@ -45,7 +44,7 @@ SUMMARIZE_AFTER_MESSAGES = 20
 # Code runs per General turn: enough to fix a failed script and try again.
 GENERAL_MAX_TOOL_ROUNDS = 4
 
-SYSTEM_PROMPT = IDENTITY + """ You are a research assistant for a personal document library. \
+SYSTEM_PROMPT = """You are a research assistant for a personal document library. \
 The documents were scanned and read by OCR, so the text may contain small errors.
 
 How to answer:
@@ -65,7 +64,7 @@ put [[cite:...]] markers inside the Mermaid block. Do not add a diagram when pro
 small table would communicate the answer more clearly.
 {scope_note}"""
 
-GENERAL_SYSTEM_PROMPT = IDENTITY + """ You are a helpful, knowledgeable assistant.
+GENERAL_SYSTEM_PROMPT = """You are a helpful, knowledgeable assistant.
 
 How to answer:
 - Answer in the language of the user's OWN message, never the language of a document, attachment or search result: an English question about an Arabic document gets an English answer, and an Arabic question gets an Arabic answer.

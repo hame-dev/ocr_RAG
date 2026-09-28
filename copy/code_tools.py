@@ -772,8 +772,6 @@ Example:
 
 cell = table.cell(0, 0)
 
-cell.text_frame.text = "Header"
-
 paragraph = cell.text_frame.paragraphs[0]
 
 run = paragraph.runs[0]

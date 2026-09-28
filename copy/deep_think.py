@@ -15,11 +15,8 @@ from __future__ import annotations
 
 import logging
 
-from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_core.runnables import RunnableConfig
-from langgraph.prebuilt import ToolNode
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
-from chat.code_tools import GENERAL_TOOLS
 from chat.pipeline import emit, json_call, last_user_request, text_of
 from chat.prompts import (
     LANGUAGE_RULE, MERMAID_RULE, THINK_PLAN, THINK_REVIEW, THINK_WORK, THINK_WRITE, date_context,
@@ -30,17 +27,9 @@ logger = logging.getLogger(__name__)
 MAX_STEPS = 3
 NOTES_TOKENS = 450
 NOTES_CHARS = 2000
-DEEP_THINK_MAX_TOOL_ROUNDS = 4
-
-TOOLS_EXHAUSTED = (
-    "\n\nThe code-run budget for this turn is exhausted. Do not request more tools. "
-    "Answer now from the results already returned, and say plainly if something could not be completed."
-)
-
-_tool_node = ToolNode(GENERAL_TOOLS, handle_tool_errors=True)
 
 
-async def deep_think(state, config: RunnableConfig) -> dict:
+async def deep_think(state) -> dict:
     from chat import graph  # lazy: graph imports this module
 
     history = list(state["messages"])
@@ -106,36 +95,13 @@ async def deep_think(state, config: RunnableConfig) -> dict:
         date_context=date_context(),
         language_rule=LANGUAGE_RULE,
         mermaid_rule=MERMAID_RULE,
-        tools_note=graph.GENERAL_TOOLS_NOTE,
         notes=_format_notes(steps, notes),
         issues="\n".join(issues) or "(none)",
     )
-    writer = graph._llm(tools=GENERAL_TOOLS, reasoning=True, final=True)
-    produced: list = []
-    rounds = 0
-    while True:
-        response = await writer.ainvoke([SystemMessage(content=system), *turn, *produced], config)
-        if not getattr(response, "tool_calls", None):
-            produced.append(response)
-            break
-        if rounds >= DEEP_THINK_MAX_TOOL_ROUNDS:
-            logger.info("deep think tool cap reached; forcing answer")
-            forced = await graph._llm(with_tools=False, reasoning=True, final=True).ainvoke(
-                [SystemMessage(content=system + TOOLS_EXHAUSTED), *turn, *produced], config
-            )
-            produced.append(forced)
-            break
-        result = await _tool_node.ainvoke(
-            {
-                "messages": [response],
-                "user_id": state.get("user_id"),
-                "conversation_id": state.get("conversation_id"),
-            },
-            config,
-        )
-        produced.extend([response, *result["messages"]])
-        rounds += 1
-    return {"messages": produced}
+    response = await graph._llm(with_tools=False, reasoning=True, final=True).ainvoke(
+        [SystemMessage(content=system), *turn]
+    )
+    return {"messages": [AIMessage(content=response.content or "")]}
 
 
 def _format_notes(steps: list[str], notes: list[str]) -> str:
