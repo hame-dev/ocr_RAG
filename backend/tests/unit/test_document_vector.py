@@ -104,13 +104,14 @@ def test_list_documents_ranks_semantically_and_across_languages(make_doc, monkey
     monkeypatch.setattr("chat.tools.get_client", lambda: embedder)
     ids = [str(d.id) for d in (lease, invoice, other)]
 
+    # An English query finds the Arabic lease; unrelated documents are not listed.
     result = _list(allowed_doc_ids=ids, query="lease agreements", limit=2)
-    assert [r["document_id"] for r in result][:1] == [str(lease.id)]
-    assert len(result) == 2
+    assert [r["document_id"] for r in result] == [str(lease.id)]
+    assert result[0]["similarity"] == 1.0
 
     # Scoped: a document outside the allowed list never appears.
-    result = _list(allowed_doc_ids=[str(invoice.id)], query="lease agreements")
-    assert [r["document_id"] for r in result] == [str(invoice.id)]
+    result = _list(allowed_doc_ids=[str(invoice.id), str(other.id)], query="lease agreements")
+    assert result == []
 
 
 @pytest.mark.django_db
@@ -146,3 +147,32 @@ def test_indexing_creates_the_document_vector(make_doc, monkeypatch, settings):
 
     index_document(str(doc.id))
     assert DocumentVector.objects.filter(document=doc).exists()
+
+
+@pytest.mark.django_db
+def test_exact_matches_come_first_and_unrelated_documents_are_not_listed(make_doc, monkeypatch):
+    from rag.tasks import upsert_document_vector
+
+    embedder = _TopicEmbedder()
+    leases = [make_doc(f"Lease {i}", "A lease.") for i in range(4)]
+    minutes = make_doc("Board minutes", "Minutes of the March meeting.")
+    # Matches "invoice" only by keyword and has no vector at all (indexed
+    # before vectors existed).
+    unvectored = make_doc("Supplier bill", "A bill.", ["invoice"])
+    for doc in leases + [minutes]:
+        upsert_document_vector(doc, doc.metadata, embedder)
+    monkeypatch.setattr("chat.tools.get_client", lambda: embedder)
+    ids = [str(d.id) for d in Document.objects.all()]
+
+    # More semantic matches than the limit must not push out an exact match.
+    result = _list(allowed_doc_ids=ids, query="Lease 3", limit=2)
+    assert result[0]["document_id"] == str(leases[3].id)
+    assert len(result) == 2
+
+    result = _list(allowed_doc_ids=ids, query="invoice", limit=2)
+    assert [r["document_id"] for r in result] == [str(unvectored.id)]
+
+    # Nothing is about "lease" in the minutes, so they are not listed at all.
+    result = _list(allowed_doc_ids=ids, query="lease terms", limit=10)
+    assert str(minutes.id) not in [r["document_id"] for r in result]
+    assert {r["document_id"] for r in result} == {str(d.id) for d in leases}

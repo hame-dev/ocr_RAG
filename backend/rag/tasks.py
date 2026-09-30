@@ -26,12 +26,25 @@ CONTEXT_VERSION = 1
 # Keywords in the weight-A lexical column after stage 2 merges its own in.
 MAX_CHUNK_KEYWORDS = 12
 # A soft time limit re-queues the task to carry on (finished windows are
-# cached and skipped); this bounds how many times.
+# cached and skipped); this bounds how many times in a row.
 MAX_CONTEXT_CONTINUATIONS = 5
 
 
 def sha256(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def lock_document(document_id):
+    """FOR NO KEY UPDATE on the document row; returns its current revision id.
+
+    Every transaction that rewrites a document's chunks takes this first.
+    """
+    return (
+        Document.objects.select_for_update(no_key=True)
+        .filter(id=document_id)
+        .values_list("current_revision_id", flat=True)
+        .first()
+    )
 
 
 def document_title(document, record) -> str:
@@ -163,6 +176,10 @@ def index_document(document_id: str):
         # keep surfacing text the user has since corrected. One transaction, so
         # search never sees the document with no chunks at all.
         with transaction.atomic():
+            # Same lock, taken first, as stage 2's per-window update: the two
+            # writers queue instead of deadlocking on chunk rows. NO KEY, so
+            # it does not conflict with the FK check of the inserted chunks.
+            lock_document(document.id)
             Chunk.objects.filter(document=document).delete()
             Chunk.objects.bulk_create(rows, batch_size=100)
 
@@ -303,6 +320,16 @@ def contextualize_document(document_id: str, index_run_id: int, continuation: in
             run.context_done = done
             run.save(update_fields=["context_done"])
             fsm.publish(document.id, "context_progress", {"done": done, "of": len(windows)})
+            if llm_calls >= settings.CHUNK_CONTEXT_WINDOWS_PER_TASK and done < len(windows):
+                # Hand the single LLM worker back: with the priority queue
+                # order, anything waiting on `llm` runs before this resumes.
+                # Finished windows are cache hits with nothing to update.
+                run.context_status = "queued"
+                run.save(update_fields=["context_status"])
+                contextualize_document.apply_async(
+                    args=[str(document_id), run.id, continuation], queue="llm_bg"
+                )
+                return {"continued": done, "of": len(windows), "llm_calls": llm_calls}
         run.context_status = "succeeded"
     except _Aborted as exc:
         run.context_status, run.context_error = "aborted", str(exc)
@@ -362,12 +389,7 @@ def _apply_window(client, document_id, revision_id, window, result, model, title
         chunk.embedding = vector
 
     with transaction.atomic():
-        current = (
-            Document.objects.select_for_update()
-            .filter(id=document_id)
-            .values_list("current_revision_id", flat=True)
-            .first()
-        )
+        current = lock_document(document_id)
         if current != revision_id:
             raise _Aborted("revision changed")
         updated = Chunk.objects.bulk_update(

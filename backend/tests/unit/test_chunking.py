@@ -84,3 +84,8 @@ def test_a_short_one_line_block_is_not_a_heading():
     assert not _is_heading("Scope of Work", block_lines=1)
     # Numbered and upper-case headings do not need a following line.
     assert _is_heading("2. Payment Terms", block_lines=1)
+
+
+@pytest.mark.parametrize("line", ["الْفَصْلُ الأَوَّلُ: التَّعْرِيفَاتُ", "مُقَدِّمَةٌ عامة"])
+def test_vocalised_arabic_headings_are_detected(line):
+    assert _is_heading(line, block_lines=3)

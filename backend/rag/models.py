@@ -36,9 +36,11 @@ class Chunk(models.Model):
     # Denormalized filter fields, so search never joins to metadata.
     meta = models.JSONField(default=dict, blank=True)
     # Lexical-search inputs, rebuilt whenever the chunk's metadata changes.
-    keywords_text = models.TextField(blank=True, default="")
-    context_text = models.TextField(blank=True, default="")
-    title_text = models.TextField(blank=True, default="")
+    # db_default so a worker still on pre-0003 code (which omits them) can
+    # insert while the migration is already applied.
+    keywords_text = models.TextField(blank=True, default="", db_default="")
+    context_text = models.TextField(blank=True, default="", db_default="")
+    title_text = models.TextField(blank=True, default="", db_default="")
     embedding = VectorField(dimensions=1024, null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 

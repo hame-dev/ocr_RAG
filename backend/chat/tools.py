@@ -131,6 +131,7 @@ async def list_documents(
 
     @sync_to_async(thread_sensitive=True)
     def _load():
+        from django.conf import settings
         from django.db.models import Q
         from pgvector.django import CosineDistance
 
@@ -153,23 +154,26 @@ async def list_documents(
         if not query:
             docs = list(qs.distinct()[:cap])
         else:
-            # Semantic order first, then exact title/keyword matches the
-            # vectors missed (e.g. documents indexed before vectors existed).
+            # Exact title/keyword matches first: they are what the user named,
+            # and a document indexed before vectors existed has no vector.
+            # Then documents close in meaning, above a floor, so "anything
+            # about X?" with nothing relevant returns nothing.
             if query_vector is not None:
                 ranked = (
                     DocumentVector.objects.filter(document__in=qs)
                     .annotate(distance=CosineDistance("embedding", query_vector))
+                    .filter(distance__lte=1 - settings.DOC_SEARCH_MIN_SIMILARITY)
                     .order_by("distance")
                     .values_list("document_id", "distance")[:cap]
                 )
                 similarity = {doc_id: round(1 - float(distance), 3) for doc_id, distance in ranked}
-            matched = qs.filter(
-                Q(title__icontains=query) | Q(metadata__keywords__overlap=[query])
-            ).distinct()[:cap]
-            by_id = {d.id: d for d in qs.filter(id__in=list(similarity))}
-            docs = [by_id[i] for i in similarity if i in by_id]
-            docs += [d for d in matched if d.id not in similarity]
-            docs = docs[:cap]
+            matched = list(
+                qs.filter(Q(title__icontains=query) | Q(metadata__keywords__overlap=[query])).distinct()[:cap]
+            )
+            matched.sort(key=lambda d: -similarity.get(d.id, 0.0))
+            matched_ids = {d.id for d in matched}
+            by_id = {d.id: d for d in qs.filter(id__in=[i for i in similarity if i not in matched_ids])}
+            docs = (matched + [by_id[i] for i in similarity if i in by_id])[:cap]
 
         return [
             {

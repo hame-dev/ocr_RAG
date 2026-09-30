@@ -51,17 +51,17 @@ class Migration(migrations.Migration):
         migrations.AddField(
             model_name='chunk',
             name='context_text',
-            field=models.TextField(blank=True, default=''),
+            field=models.TextField(blank=True, db_default='', default=''),
         ),
         migrations.AddField(
             model_name='chunk',
             name='keywords_text',
-            field=models.TextField(blank=True, default=''),
+            field=models.TextField(blank=True, db_default='', default=''),
         ),
         migrations.AddField(
             model_name='chunk',
             name='title_text',
-            field=models.TextField(blank=True, default=''),
+            field=models.TextField(blank=True, db_default='', default=''),
         ),
         migrations.AddField(
             model_name='indexrun',

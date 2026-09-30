@@ -244,3 +244,73 @@ def test_contextualize_routes_to_llm_bg_and_index_stays_on_index():
     router = current_app.amqp.router
     assert router.route({}, "rag.tasks.contextualize_document")["queue"].name == "llm_bg"
     assert router.route({}, "rag.tasks.index_document")["queue"].name == "index"
+
+
+def _locks(queries) -> list[str]:
+    return [q["sql"] for q in queries if "FOR NO KEY UPDATE" in q["sql"] and "documents_document" in q["sql"]]
+
+
+@pytest.mark.django_db
+def test_index_and_stage2_serialize_on_the_same_document_row_lock(indexed, monkeypatch, settings):
+    """Both writers take FOR NO KEY UPDATE on the document first, so they queue
+    behind each other instead of deadlocking on chunk rows; NO KEY does not
+    block the FK check of the chunks being inserted."""
+    from django.db import connection
+    from django.test.utils import CaptureQueriesContext
+
+    from rag.tasks import index_document, queue_contextualize
+
+    monkeypatch.setattr("rag.tasks.get_client", lambda: _FakeOllama())
+    with CaptureQueriesContext(connection) as stage2:
+        queue_contextualize(str(indexed.id))
+    assert _locks(stage2.captured_queries)
+
+    settings.CHUNK_CONTEXT_ENABLED = False
+    with CaptureQueriesContext(connection) as stage1:
+        index_document(str(indexed.id))
+    assert _locks(stage1.captured_queries)
+
+
+@pytest.mark.django_db
+def test_chunks_replaced_by_a_reindex_abort_the_window(indexed, monkeypatch):
+    from rag.models import Chunk, IndexRun
+    from rag.tasks import queue_contextualize
+
+    def reindex_behind_our_back():
+        # Same revision, new chunk rows: what a concurrent index_document does.
+        for chunk in Chunk.objects.filter(document=indexed):
+            Chunk.objects.filter(id=chunk.id).delete()
+
+    fake = _FakeOllama(on_generate=reindex_behind_our_back)
+    monkeypatch.setattr("rag.tasks.get_client", lambda: fake)
+    queue_contextualize(str(indexed.id))
+    run = IndexRun.objects.filter(document=indexed).first()
+    assert (run.context_status, run.context_error) == ("aborted", "chunks were replaced by a re-index")
+
+
+@pytest.mark.django_db
+def test_stage2_yields_the_llm_worker_after_a_few_windows(indexed, monkeypatch, settings):
+    """A long document must not hold the single LLM worker for its whole run:
+    after CHUNK_CONTEXT_WINDOWS_PER_TASK LLM calls the task re-queues itself, so
+    anything waiting on the higher-priority llm queue runs in between."""
+    from rag import tasks
+    from rag.models import IndexRun
+
+    settings.CHUNK_CONTEXT_WINDOWS_PER_TASK = 1
+    queued = []
+    original = tasks.contextualize_document.apply_async
+
+    def spy(*args, **kwargs):
+        queued.append(kwargs.get("queue"))
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(tasks.contextualize_document, "apply_async", spy)
+    fake = _FakeOllama()
+    monkeypatch.setattr("rag.tasks.get_client", lambda: fake)
+
+    tasks.queue_contextualize(str(indexed.id))
+
+    assert queued == ["llm_bg", "llm_bg"]  # the first run, then one continuation
+    assert fake.generate_calls == 2
+    run = IndexRun.objects.filter(document=indexed).first()
+    assert (run.context_status, run.context_done, run.context_windows) == ("succeeded", 2, 2)

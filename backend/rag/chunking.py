@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 import re
+import unicodedata
 from dataclasses import dataclass, field
 
 import regex
@@ -101,10 +102,13 @@ def _is_heading(line: str, *, block_lines: int = 2) -> bool:
         return False
     if _PAGE_NUMBER.match(stripped):
         return False
-    # Measured without the leading section number and without spaces, so
+    # Measured without the leading section number, spaces or combining marks, so
     # "3.1.2 Fees" is judged by "Fees", while "12.03.2024 10:45" is rejected.
     number = _HEADING_NUMBER.match(stripped)
     rest = "".join((stripped[number.end():] if number else stripped).split())
+    # Tashkeel and other combining marks are not letters to isalpha(), but they
+    # are part of the word: a fully vocalised Arabic heading is still a heading.
+    rest = "".join(ch for ch in rest if unicodedata.category(ch) != "Mn")
     letters = sum(1 for ch in rest if ch.isalpha())
     if letters < 3 or (len(rest) - letters) / len(rest) > 0.4:
         return False

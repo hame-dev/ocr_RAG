@@ -168,6 +168,9 @@ CREATE INDEX IF NOT EXISTS chunk_tsv ON rag_chunk USING gin (tsv);
 | `CHUNK_CONTEXT_WINDOW_TOKENS` | `3000` | Max tokens per stage-2 window |
 | `CHUNK_CONTEXT_WINDOW_CHUNKS` | `6` | Max chunks per stage-2 window |
 | `CHUNK_CONTEXT_PROMPT_VERSION` | `v1` | Part of the cache key; bump to regenerate |
+| `CHUNK_CONTEXT_WINDOWS_PER_TASK` | `4` | LLM calls per stage-2 task before it re-queues itself (hands the LLM worker back) |
+| `CHUNK_CONTEXT_SOFT_TIME_LIMIT_S` | `1800` | Soft limit per stage-2 task; on expiry it re-queues (at most 5 times in a row) |
+| `DOC_SEARCH_MIN_SIMILARITY` | `0.45` | Minimum cosine for `list_documents(query=...)` semantic matches |
 
 ## 5. Measuring it
 
@@ -185,7 +188,7 @@ queries **before** the retrieval changes land and keep the baseline JSON.
 ## 6. Implementation checklist
 
 - [x] **0a.** This document, linked from the README.
-- [x] **0.** `rag_eval` management command + metric tests + Makefile target; capture the baseline.
+- [x] **0.** `rag_eval` management command + metric tests + Makefile target. **Pending (needs the user's query set):** capture the baseline.
 - [x] **1.** Chunker fixes: overlap never crosses a page, `page_start` correct, section heading persists across pages, tighter heading detection, tail chunk carries section/meta. Tests in `tests/unit/test_chunking.py`.
 - [x] **2.** `rag/context.py` (header builder) and `rag/keywords.py` (YAKE, ar/en/mixed) + `yake` dependency.
 - [x] **3.** Schema (`keywords_text`, `context_text`, `title_text`, `ChunkContext`, `DocumentVector`, `IndexRun.context_*`), migration 0003 with the weighted `tsv`, stage-1 indexing writes the new fields, `format_hits` exposes them, `reindex_all` command.
@@ -200,8 +203,11 @@ queries **before** the retrieval changes land and keep the baseline JSON.
   them later. Existing documents need `make reindex-all` once after deploying.
 - The reranker model is pulled by `make warmup`. If it is missing, search logs
   one warning and falls back to RRF order.
-- The `worker-llm` container consumes `llm` before `llm_bg`, so enrichment of a
-  new upload is never queued behind background contextualization.
+- The `worker-llm` container takes `llm` work before `llm_bg`, and each stage-2
+  task re-queues itself after `CHUNK_CONTEXT_WINDOWS_PER_TASK` (4) LLM calls, so
+  enrichment of a new upload waits for at most a few windows.
+- `list_documents(query=...)` lists exact title/keyword matches first, then
+  documents with cosine similarity ≥ `DOC_SEARCH_MIN_SIMILARITY` (0.45).
 - Stage-2 results are cached in `ChunkContext` by (title + section + window text,
   model, prompt version); a re-index of an unchanged document makes zero LLM calls.
 - DOCX is **not** an ingestion format (the upload validator accepts PDF and

@@ -157,3 +157,19 @@ def test_reindex_all_only_missing_queues_documents_without_chunk_metadata(docume
     call_command("reindex_all")
     assert sorted(queued) == sorted([str(document.id), str(fresh.id)])
     assert old.document_id == document.id
+
+
+@pytest.mark.django_db
+def test_an_insert_without_the_new_columns_still_works(document):
+    """Workers still running pre-0003 code insert chunks without these columns
+    while the migration is already applied; that must not fail indexing."""
+    _revision(document, "x")
+    with connection.cursor() as cursor:
+        cursor.execute(
+            "INSERT INTO rag_chunk (id, document_id, revision_id, chunk_index, section_path, lang, text,"
+            " token_count, char_count, meta, created_at)"
+            " VALUES (gen_random_uuid(), %s, %s, 0, '', 'en', 'old worker text', 0, 0, '{}', now())"
+            " RETURNING keywords_text, context_text, title_text, tsv IS NULL",
+            [document.id, document.current_revision_id],
+        )
+        assert cursor.fetchone() == ("", "", "", False)

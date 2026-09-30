@@ -200,6 +200,9 @@ RERANK_CANDIDATES = int(os.environ.get("RERANK_CANDIDATES", "20"))
 RERANK_WORKERS = int(os.environ.get("RERANK_WORKERS", "4"))
 RERANK_TIMEOUT_S = float(os.environ.get("RERANK_TIMEOUT_S", "8"))
 RERANK_CALL_TIMEOUT_S = float(os.environ.get("RERANK_CALL_TIMEOUT_S", "5"))
+# list_documents(query=...) only lists documents at least this close in meaning
+# (cosine over DocumentVector), plus exact title/keyword matches. Tune with data.
+DOC_SEARCH_MIN_SIMILARITY = float(os.environ.get("DOC_SEARCH_MIN_SIMILARITY", "0.45"))
 
 # ---- Retrieval: stage-2 chunk context ------------------------------------------
 # After indexing, a background task (queue llm_bg, drained after llm) writes a
@@ -211,6 +214,9 @@ CHUNK_CONTEXT_WINDOW_TOKENS = int(os.environ.get("CHUNK_CONTEXT_WINDOW_TOKENS", 
 CHUNK_CONTEXT_WINDOW_CHUNKS = int(os.environ.get("CHUNK_CONTEXT_WINDOW_CHUNKS", "6"))
 CHUNK_CONTEXT_PROMPT_VERSION = os.environ.get("CHUNK_CONTEXT_PROMPT_VERSION", "v1")
 CHUNK_CONTEXT_SOFT_TIME_LIMIT_S = int(os.environ.get("CHUNK_CONTEXT_SOFT_TIME_LIMIT_S", "1800"))
+# LLM calls per task before it re-queues itself, so one long document never
+# holds the single LLM worker (and new uploads' enrichment) for long.
+CHUNK_CONTEXT_WINDOWS_PER_TASK = int(os.environ.get("CHUNK_CONTEXT_WINDOWS_PER_TASK", "4"))
 
 # ---- General chat code runner ---------------------------------------------------
 # Sandboxed sidecar (docker/code-runner) for the Python General chat writes.

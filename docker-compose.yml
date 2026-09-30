@@ -20,6 +20,8 @@ x-ollama-env: &ollama-env
   CHUNK_CONTEXT_WINDOW_TOKENS: ${CHUNK_CONTEXT_WINDOW_TOKENS:-3000}
   CHUNK_CONTEXT_WINDOW_CHUNKS: ${CHUNK_CONTEXT_WINDOW_CHUNKS:-6}
   CHUNK_CONTEXT_PROMPT_VERSION: ${CHUNK_CONTEXT_PROMPT_VERSION:-v1}
+  CHUNK_CONTEXT_WINDOWS_PER_TASK: ${CHUNK_CONTEXT_WINDOWS_PER_TASK:-4}
+  DOC_SEARCH_MIN_SIMILARITY: ${DOC_SEARCH_MIN_SIMILARITY:-0.45}
 
 x-django-env: &django-env
   DJANGO_SETTINGS_MODULE: ${DJANGO_SETTINGS_MODULE:-config.settings.dev}
@@ -160,8 +162,11 @@ services:
       - worker
       - -l
       - info
+      # Order matters: with the broker's "priority" queue order this worker
+      # drains queues left to right, and indexing is short, so a document
+      # becomes searchable without waiting for every queued OCR page.
       - -Q
-      - default,celery,ocr_cpu,index
+      - default,celery,index,ocr_cpu
       - -c
       - "${OCR_PARALLELISM:-2}"
       - --max-tasks-per-child

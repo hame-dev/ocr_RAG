@@ -114,10 +114,19 @@ SMOKE_USERNAME=alice SMOKE_PASSWORD=... make smoke   # full live pipeline, ~1–
 **Upgrading from a version without login?** Existing documents and chats have no
 owner and stay hidden until you assign them: `make claim U=alice`.
 
-**Upgrading from a version without per-chunk metadata?** Run `make migrate`,
-`make warmup` (pulls the reranker and the stage-2 model), then
-`make reindex-all ARGS=--only-missing` once so existing chunks get keywords,
-headers and section context.
+**Upgrading from a version without per-chunk metadata?** Rebuild first: the
+workers need the new `yake` dependency and `worker-llm` the new `llm_bg` queue.
+
+```bash
+make build && make up                   # rebuilds images; `up` also runs the migrations
+make warmup                             # pulls the reranker and the stage-2 model
+make reindex-all ARGS=--only-missing    # existing chunks get keywords, headers, context
+```
+
+Migration 0003 rewrites `rag_chunk` (the search column is rebuilt), so search
+pauses briefly while it runs on a large library. Re-indexing replaces each
+document's chunks, so citations in older chats that point at those chunks stop
+resolving; stage 2 afterwards updates chunks in place and keeps their ids.
 
 A `bundled-ollama` compose profile exists for portability, but on macOS it is
 much slower — Docker has no GPU passthrough there, so a VLM OCR page takes
@@ -198,8 +207,10 @@ Every chunk carries its own metadata, not only a copy of the document's:
   same-section chunks writes a section summary and keywords, re-embeds those
   chunks with the richer header and updates them **in place** (chunk ids and
   citations survive). Results are cached by content, so a re-index makes no LLM
-  calls. `worker-llm` always drains `llm` before `llm_bg`, so a new upload is
-  never stuck behind it. Progress is published as `context_progress` events.
+  calls. `worker-llm` always takes `llm` work before `llm_bg`, and a stage-2
+  task hands the worker back every `CHUNK_CONTEXT_WINDOWS_PER_TASK` LLM calls,
+  so a new upload waits at most for a few windows, not a whole document.
+  Progress is published as `context_progress` events.
 - **Search.** Hybrid (pgvector + weighted tsvector, RRF) fetches
   `RERANK_CANDIDATES` rows and a Qwen3-Reranker on Ollama reorders them. Any
   reranker failure or deadline keeps the RRF order. Pass `"rerank": false` to
