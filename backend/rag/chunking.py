@@ -84,7 +84,7 @@ class ChunkDraft:
 _HEADING_NUMBER = re.compile(r"^\s*(\d+(?:\.\d+)*)[.)\s]")
 # "Page 3 of 12", "3 / 12", "صفحة ٣", "٣ من ١٢", "- 4 -": page furniture, never a heading.
 _PAGE_NUMBER = re.compile(
-    r"^\s*[-–—.\s]*(page|p\.|صفحة|ص)?\s*[\d٠-٩]+\s*((of|/|من|-)\s*[\d٠-٩]+)?[-–—.\s]*$",
+    r"^\s*[-–—.\s]*(page|p\.|الصفحة|صفحة|ص)?\s*[\d٠-٩]+\s*((of|/|من|-)\s*[\d٠-٩]+)?[-–—.\s]*$",
     re.IGNORECASE,
 )
 
@@ -101,8 +101,12 @@ def _is_heading(line: str, *, block_lines: int = 2) -> bool:
         return False
     if _PAGE_NUMBER.match(stripped):
         return False
-    letters = sum(1 for ch in stripped if ch.isalpha())
-    if letters < 3 or (len(stripped) - letters) / len(stripped) > 0.4:
+    # Measured without the leading section number and without spaces, so
+    # "3.1.2 Fees" is judged by "Fees", while "12.03.2024 10:45" is rejected.
+    number = _HEADING_NUMBER.match(stripped)
+    rest = "".join((stripped[number.end():] if number else stripped).split())
+    letters = sum(1 for ch in rest if ch.isalpha())
+    if letters < 3 or (len(rest) - letters) / len(rest) > 0.4:
         return False
     if _HEADING_NUMBER.match(stripped):
         return True
