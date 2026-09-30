@@ -57,9 +57,16 @@ def preprocess_document(document_id: str, profiles: list[str] | None = None):
         fsm.transition_to(document, fsm.PREPROCESSING)
 
     try:
+        
+        
         preprocess.analyze(document)
+        
         for profile_name in profiles or ["neural"]:
+            if profile_name == "raw" and document.is_digital_pdf:
+                continue
             preprocess.rasterize(document, profile_name)
+
+
     except Exception as exc:
         logger.exception("preprocessing failed for %s", document_id)
         document.error_code = "preprocess_failed"

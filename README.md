@@ -109,6 +109,12 @@ make test-runner  # code-execution sandbox tests, run inside its own image
 SMOKE_USERNAME=alice SMOKE_PASSWORD=... make smoke   # full live pipeline, ~1–2 min
 ```
 
+Command to inject multiple document into RAG directly without upload
+```
+docker compose run --rm   -v "$(realpath ncst_processed):/ingest:ro"   backend   python manage.py ingest_folder /ingest
+```
+
+
 **Upgrading from a version without login?** Existing documents and chats have no
 owner and stay hidden until you assign them: `make claim U=alice`.
 
