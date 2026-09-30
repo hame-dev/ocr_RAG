@@ -83,8 +83,9 @@ The interface defaults to English and switches to Arabic with full RTL layout; t
 
 - Docker Desktop, ~8 GB free
 - [Ollama](https://ollama.com) running on the host
-- ~15 GB for models: `qwen3.5:9b` (6.6 GB), `fredrezones55/chandra-ocr-2` (5.8 GB),
-  `bge-m3` (1.2 GB), `surya-ocr-2` (609 MB)
+- ~19 GB for models: `qwen3.5:9b` (6.6 GB), `fredrezones55/chandra-ocr-2` (5.8 GB),
+  `qwen3.5:4b` (3.4 GB, background chunk context), `bge-m3` (1.2 GB),
+  `surya-ocr-2` (609 MB), `dengcao/Qwen3-Reranker-0.6B` (search reranker)
 
 ```bash
 cp .env.example .env
@@ -113,6 +114,11 @@ SMOKE_USERNAME=alice SMOKE_PASSWORD=... make smoke   # full live pipeline, ~1–
 **Upgrading from a version without login?** Existing documents and chats have no
 owner and stay hidden until you assign them: `make claim U=alice`.
 
+**Upgrading from a version without per-chunk metadata?** Run `make migrate`,
+`make warmup` (pulls the reranker and the stage-2 model), then
+`make reindex-all ARGS=--only-missing` once so existing chunks get keywords,
+headers and section context.
+
 A `bundled-ollama` compose profile exists for portability, but on macOS it is
 much slower — Docker has no GPU passthrough there, so a VLM OCR page takes
 minutes instead of seconds.
@@ -124,7 +130,7 @@ minutes instead of seconds.
 ```
 Browser ──SSE──> Django (ASGI/uvicorn) ──> Postgres 17 + pgvector
    │                  │                        └─ documents, chunks, langgraph checkpoints
-   │                  ├──> Redis ──> Celery (queues: ocr_cpu, llm=1, index)
+   │                  ├──> Redis ──> Celery (queues: ocr_cpu, llm=1 then llm_bg, index)
    │                  ├──> code-runner (internal network only; General mode's run_python)
    │                  └──> host.docker.internal:11434 ──> Ollama (Metal GPU)
    └──> Next.js 15                                          qwen3.5:9b, bge-m3, surya-ocr-2
@@ -178,11 +184,41 @@ Backend is 7 Django apps and 40+ endpoints; frontend is Next.js 15 with Tailwind
 - **Grapheme-aware diffing.** `مَكْتَبَة` is 5 graphemes but 9 codepoints, so every
   diff goes through `\X` rather than naive `difflib`.
 
-### Retrieval quality roadmap
+### Retrieval
 
-Per-chunk metadata, contextual headers, weighted lexical search and reranking —
-the design, the evidence behind it and the implementation checklist live in
-[RAG_CHUNK_METADATA_PLAN.md](RAG_CHUNK_METADATA_PLAN.md).
+Every chunk carries its own metadata, not only a copy of the document's:
+
+- **Stage 1 (index queue, seconds).** Page-accurate chunks; YAKE keywords per
+  chunk (no LLM); a short header — document title, one-line summary, section —
+  embedded with the text (the stored `text` stays raw, so quotes and citations
+  are exact); a weighted full-text column (keywords **A** > section context **B**
+  > body **C** > title **D**); and one vector per document for "which documents
+  are about X". The document is READY and searchable at the end of stage 1.
+- **Stage 2 (`llm_bg` queue, background).** One LLM call per window of up to six
+  same-section chunks writes a section summary and keywords, re-embeds those
+  chunks with the richer header and updates them **in place** (chunk ids and
+  citations survive). Results are cached by content, so a re-index makes no LLM
+  calls. `worker-llm` always drains `llm` before `llm_bg`, so a new upload is
+  never stuck behind it. Progress is published as `context_progress` events.
+- **Search.** Hybrid (pgvector + weighted tsvector, RRF) fetches
+  `RERANK_CANDIDATES` rows and a Qwen3-Reranker on Ollama reorders them. Any
+  reranker failure or deadline keeps the RRF order. Pass `"rerank": false` to
+  `/api/search/` to compare. Parallel reranking needs `OLLAMA_NUM_PARALLEL>=4`
+  on the host Ollama; otherwise lower `RERANK_CANDIDATES` if searches feel slow.
+
+```bash
+make reindex-all                            # re-index everything (stage 1, then stage 2)
+make reindex-all ARGS=--only-missing        # only chunks indexed before per-chunk metadata
+make reindex-all ARGS=--contextualize-only  # stage 2 only
+make rag-eval F=queries.jsonl U=alice ARGS="--compare --json-out baseline.json"  # → backend/baseline.json
+```
+
+`rag-eval` reads one JSON object per line —
+`{"query": "…", "expected_document_id": "…", "expected_pages": [3]}` — and
+reports document and page recall@5/@10, MRR@10 and mean latency, with and
+without the reranker under `--compare`. Write 30–50 real queries before
+changing retrieval and keep the baseline. The design, the evidence behind it
+and every setting are in [RAG_CHUNK_METADATA_PLAN.md](RAG_CHUNK_METADATA_PLAN.md).
 
 ### Anti-hallucination
 

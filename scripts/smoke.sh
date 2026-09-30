@@ -142,7 +142,7 @@ metadata_payload=$(acurl "$API_BASE/api/documents/$document_id/metadata/")
 printf '%s' "$metadata_payload" | jq -e '.doc_type and .title and .model_id' >/dev/null \
   || fail "metadata is incomplete"
 
-printf '7/9 Validating cross-lingual hybrid retrieval...\n'
+printf '7/9 Validating cross-lingual hybrid retrieval (reranked, then plain RRF)...\n'
 search_payload=$(acurl -X POST "$API_BASE/api/search/" \
   -H 'Content-Type: application/json' \
   -d '{"query":"ما قيمة الإيجار السنوي؟","top_k":3}')
@@ -151,6 +151,15 @@ search_payload=$(acurl -X POST "$API_BASE/api/search/" \
 printf '%s' "$search_payload" | jq -e --arg document_id "$document_id" \
   '.results | any(.document_id == $document_id)' >/dev/null \
   || fail "hybrid search did not retrieve the uploaded document"
+printf '%s' "$search_payload" | jq -e '.results | all(has("keywords") and has("context") and has("section"))' >/dev/null \
+  || fail "search hits do not carry per-chunk keywords/context/section"
+printf '%s' "$search_payload" | jq -e '[.results[].keywords | length] | add > 0' >/dev/null \
+  || fail "no search hit has any per-chunk keywords (was the document indexed by stage 1?)"
+plain_payload=$(acurl -X POST "$API_BASE/api/search/" \
+  -H 'Content-Type: application/json' \
+  -d '{"query":"ما قيمة الإيجار السنوي؟","top_k":3,"rerank":false}')
+[ "$(printf '%s' "$plain_payload" | jq -r .count)" -gt 0 ] \
+  || fail "search without the reranker returned no hits"
 
 printf '8/9 Running the LangGraph SSE agent...\n'
 conversation_request=$(jq -nc --arg document_id "$document_id" \

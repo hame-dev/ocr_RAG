@@ -192,7 +192,7 @@ queries **before** the retrieval changes land and keep the baseline JSON.
 - [x] **4.** Reranker: `OllamaClient.score_yes_no`, `rag/rerank.py`, `hybrid_search(rerank=, candidates=)`, settings, warmup script.
 - [x] **5.** `DocumentVector` upsert during indexing; semantic `list_documents`.
 - [x] **6.** Stage 2: `rag/contextualize.py`, `contextualize_document` task on the `llm_bg` queue, cache, in-place updates, progress events, compose/route changes.
-- [ ] **7.** `.env.example`, README, smoke test updates; run the eval before/after and record the numbers here.
+- [x] **7.** `.env.example`, README, smoke test updates. **Pending (needs the user's query set):** run the eval before/after and record the numbers here.
 
 ## 7. Operating notes
 
