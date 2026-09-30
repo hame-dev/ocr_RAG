@@ -33,6 +33,7 @@ db.sqlite3-journal
 # so it conflicts on every merge and belongs to the runtime, not the repo.
 celerybeat-schedule
 celerybeat-schedule.*
+celerybeat-schedule-*
 celerybeat.pid
 
 # ---- Tests / tooling --------------------------------------------------------

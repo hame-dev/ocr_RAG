@@ -4,6 +4,8 @@ import uuid
 
 import pytest
 
+from chat import code_tools
+from chat.deep_think import DEEP_THINK_MAX_TOOL_ROUNDS
 from chat.models import Conversation, Message
 from documents.models import Document
 from tests.fakes import Script, as_json, stream, use_script
@@ -108,6 +110,74 @@ def test_deep_think_hands_review_findings_to_the_writer(auth_client, user, monke
     assert working == [1, 2]  # no re-work loop
     assert "Step 2: arithmetic error" in script.prompts[-1][0].content
     assert dict(events)["done"]["content"] == "final"
+
+
+def _plan_one_step() -> list:
+    return [
+        as_json({"goal": "g", "steps": [{"question": "compute it"}]}),
+        "use run_python for the sum",
+        as_json({"ok": True, "issues": []}),
+    ]
+
+
+def _run_call(call_id: str, code: str = "print(12 + 5)") -> dict:
+    return {"content": "", "tool_calls": [{"name": "run_python", "args": {"code": code}, "id": call_id}]}
+
+
+def test_deep_think_writer_can_run_python(auth_client, user, monkeypatch, settings, tmp_path):
+    settings.MEDIA_ROOT = str(tmp_path)
+    seen: list[str] = []
+
+    async def runner(code: str) -> dict:
+        seen.append(code)
+        return {"ok": True, "stdout": "17\n", "stderr": "", "duration_ms": 5, "files": []}
+
+    monkeypatch.setattr(code_tools, "call_runner", runner)
+    script = Script([*_plan_one_step(), _run_call("c1"), "The sum is 17."])
+    use_script(monkeypatch, script)
+    conversation = Conversation.objects.create(owner=user)
+
+    _, events = stream(auth_client, conversation.id, chat_mode="general", thinking="deep")
+
+    assert seen == ["print(12 + 5)"]
+    # The writer is bound to run_python and sees the tool's output on its next call.
+    assert script.calls[-1]["tools"] == ["run_python"]
+    assert any(m.type == "tool" and "17" in m.content for m in script.prompts[-1])
+    runs = [data for name, data in events if name == "code_run"]
+    assert len(runs) == 1 and runs[0]["ok"] and runs[0]["stdout"] == "17\n"
+    done = dict(events)["done"]
+    assert done["content"] == "The sum is 17."
+    assert [r["code"] for r in done["tool_calls"]] == ["print(12 + 5)"]
+
+
+def test_deep_think_writer_is_forced_to_answer_after_the_tool_cap(auth_client, user, monkeypatch, settings, tmp_path):
+    settings.MEDIA_ROOT = str(tmp_path)
+
+    async def runner(code: str) -> dict:
+        return {"ok": False, "stdout": "", "stderr": "NameError", "duration_ms": 5, "files": []}
+
+    monkeypatch.setattr(code_tools, "call_runner", runner)
+    greedy = [_run_call(f"c{i}") for i in range(DEEP_THINK_MAX_TOOL_ROUNDS + 1)]
+    script = Script([*_plan_one_step(), *greedy, "Could not finish the calculation."])
+    use_script(monkeypatch, script)
+    conversation = Conversation.objects.create(owner=user)
+
+    _, events = stream(auth_client, conversation.id, chat_mode="general", thinking="deep")
+
+    assert len([1 for name, _ in events if name == "code_run"]) == DEEP_THINK_MAX_TOOL_ROUNDS
+    assert script.calls[-1]["with_tools"] is False
+    assert "code-run budget for this turn is exhausted" in script.prompts[-1][0].content
+    assert dict(events)["done"]["content"] == "Could not finish the calculation."
+
+
+def test_system_prompts_carry_the_bayan_identity(auth_client, user, monkeypatch):
+    script = Script(["hello"])
+    use_script(monkeypatch, script)
+    conversation = Conversation.objects.create(owner=user)
+
+    stream(auth_client, conversation.id, chat_mode="general", thinking="instant")
+
+    assert "You are Bayan" in script.prompts[0][0].content
 
 
 def _hit(document, chunk_id, text):

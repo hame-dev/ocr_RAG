@@ -63,11 +63,18 @@ class RunJobTests(unittest.TestCase):
     def test_the_example_libraries_are_importable(self):
         code = (
             "import numpy, sympy, scipy, pandas, openpyxl, docx, pptx, arabic_reshaper, bidi\n"
+            "from reportlab.pdfbase import pdfmetrics\n"
+            "from reportlab.pdfbase.ttfonts import TTFont\n"
+            "from reportlab.platypus import Paragraph, SimpleDocTemplate\n"
+            "from reportlab.lib.styles import getSampleStyleSheet\n"
             "import matplotlib.pyplot as plt\n"
             "plt.bar(['A', 'B'], [1, 2]); plt.savefig('chart.png')\n"
             "wb = openpyxl.Workbook(); wb.save('book.xlsx')\n"
             "docx.Document().save('doc.docx')\n"
             "pptx.Presentation().save('deck.pptx')\n"
+            # The Arabic font path the prompt tells the model to register.
+            "pdfmetrics.registerFont(TTFont('NotoArabic', '/usr/share/fonts/truetype/noto/NotoSansArabic-Regular.ttf'))\n"
+            "SimpleDocTemplate('report.pdf').build([Paragraph('Hi', getSampleStyleSheet()['Title'])])\n"
             "print(sympy.solve(sympy.Symbol('x') ** 2 - 4))\n"
         )
         result = server.run_job(code)
@@ -77,7 +84,7 @@ class RunJobTests(unittest.TestCase):
         self.assertNotIn("MPLCONFIGDIR", result["stderr"])
         self.assertEqual(
             sorted(f["name"] for f in result["files"]),
-            ["book.xlsx", "chart.png", "deck.pptx", "doc.docx"],
+            ["book.xlsx", "chart.png", "deck.pptx", "doc.docx", "report.pdf"],
         )
 
     def _alive(self, pid: int) -> bool:

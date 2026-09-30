@@ -52,14 +52,15 @@ picks the mode per message. General mode has no search, no citations and no
 access to your library, which is useful for drafting, translating or general
 questions without leaving the conversation.
 
-**General mode runs code.** In General mode (Instant and Think) the model has one
-tool, `run_python`, so it computes answers instead of guessing them: arithmetic,
-percentages, statistics, algebra with sympy, matrices with numpy. It also draws
-charts with matplotlib, which appear inline, and creates **Excel, Word and
-PowerPoint** files (openpyxl, python-docx, python-pptx), which appear as
-downloads. Each run is shown as a collapsible "Ran code" panel with the code and
-its output. If a script fails, the model reads the error and tries again, up to
-4 runs per turn.
+**General mode runs code.** In General mode (Instant, Think and Deep think) the
+model has one tool, `run_python`, so it computes answers instead of guessing them:
+arithmetic, percentages, statistics, algebra with sympy, matrices with numpy. It
+also draws charts with matplotlib, which appear inline, and creates **Excel,
+Word, PowerPoint and PDF** files (openpyxl, python-docx, python-pptx, reportlab),
+which appear as downloads. Each run is shown as a collapsible "Ran code" panel
+with the code and its output. If a script fails, the model reads the error and
+tries again, up to 4 runs per turn. In Deep think, the final writer gets the tool
+after the plan, work and review steps.
 
 The code runs in the `code-runner` sidecar, never in the backend. That container
 sits on an internal-only Docker network (no internet, and no route to the

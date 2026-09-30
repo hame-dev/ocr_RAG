@@ -150,14 +150,16 @@ async def run_python(
     """Run Python 3 code in a sandbox and return what it printed plus any files it saved.
 
     Use it for every calculation (arithmetic, percentages, statistics, algebra,
-    calculus, equations, matrices), for charts, and to create Excel, Word or
-    PowerPoint files. Available: math, statistics, numpy, scipy, sympy, pandas,
-    matplotlib, openpyxl, python-docx (import docx), python-pptx (import pptx),
-    arabic_reshaper and bidi. No internet, no input(), 30-second limit.
+    calculus, equations, matrices), for charts, and to create Excel, Word,
+    PowerPoint or PDF files. Available: math, statistics, numpy, scipy, sympy,
+    pandas, matplotlib, openpyxl, python-docx (import docx), python-pptx
+    (import pptx), reportlab, arabic_reshaper and bidi. No internet, no
+    input(), 30-second limit.
 
     print() every result you need to see. Save files to the current directory
     with a short descriptive name (e.g. plt.savefig("sales_by_region.png"),
-    wb.save("scores.xlsx"), doc.save("report.docx"), prs.save("deck.pptx"));
+    wb.save("scores.xlsx"), doc.save("report.docx"), prs.save("deck.pptx"),
+    SimpleDocTemplate("report.pdf").build(story));
     never call plt.show(). Saved files are shown to the user automatically.
 
     Args:

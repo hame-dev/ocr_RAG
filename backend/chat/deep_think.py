@@ -10,13 +10,19 @@ reviewer flagged, took ~10 minutes. So:
     UI's thinking panel as the visible reasoning trail;
   - the reviewer's findings go to the writer to fix, instead of re-running steps;
   - thinking is spent once, in the final write, over the consolidated notes.
+
+The writer can call run_python (charts, files, exact figures), looping through
+its own ToolNode for at most DEEP_THINK_MAX_TOOL_ROUNDS before it must answer.
 """
 from __future__ import annotations
 
 import logging
 
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.runnables import RunnableConfig
+from langgraph.prebuilt import ToolNode
 
+from chat.code_tools import GENERAL_TOOLS
 from chat.pipeline import emit, json_call, last_user_request, text_of
 from chat.prompts import (
     LANGUAGE_RULE, MERMAID_RULE, THINK_PLAN, THINK_REVIEW, THINK_WORK, THINK_WRITE, date_context,
@@ -27,9 +33,18 @@ logger = logging.getLogger(__name__)
 MAX_STEPS = 3
 NOTES_TOKENS = 450
 NOTES_CHARS = 2000
+# Code runs by the writer: enough to fix a failed script and try again.
+DEEP_THINK_MAX_TOOL_ROUNDS = 4
+
+TOOLS_EXHAUSTED = (
+    "\n\nThe code-run budget for this turn is exhausted. Do not request more tools. "
+    "Answer now from the results already returned, and say plainly if something could not be completed."
+)
+
+_tool_node = ToolNode(GENERAL_TOOLS, handle_tool_errors=True)
 
 
-async def deep_think(state) -> dict:
+async def deep_think(state, config: RunnableConfig) -> dict:
     from chat import graph  # lazy: graph imports this module
 
     history = list(state["messages"])
@@ -89,19 +104,44 @@ async def deep_think(state) -> dict:
     ]
 
     # 4. Write, with thinking on (the one place it is spent). Streamed: the
-    # only call tagged as the final answer.
+    # only calls tagged as the final answer. A tool-calling turn's text is
+    # reset by the stream, so only the last turn's text is the answer.
     await emit("phase", {"phase": "writing"})
     system = THINK_WRITE.format(
         date_context=date_context(),
         language_rule=LANGUAGE_RULE,
         mermaid_rule=MERMAID_RULE,
+        tools_note=graph.GENERAL_TOOLS_NOTE,
         notes=_format_notes(steps, notes),
         issues="\n".join(issues) or "(none)",
     )
-    response = await graph._llm(with_tools=False, reasoning=True, final=True).ainvoke(
-        [SystemMessage(content=system), *turn]
-    )
-    return {"messages": [AIMessage(content=response.content or "")]}
+    writer = graph._llm(tools=GENERAL_TOOLS, reasoning=True, final=True)
+    produced: list = []
+    rounds = 0
+    while True:
+        response = await writer.ainvoke([SystemMessage(content=system), *turn, *produced], config)
+        if not getattr(response, "tool_calls", None):
+            produced.append(response)
+            break
+        if rounds >= DEEP_THINK_MAX_TOOL_ROUNDS:
+            logger.info("deep think tool cap reached; forcing an answer")
+            forced = await graph._llm(with_tools=False, reasoning=True, final=True).ainvoke(
+                [SystemMessage(content=system + TOOLS_EXHAUSTED), *turn, *produced], config
+            )
+            produced.append(forced)
+            break
+        # run_python reads the owner and conversation from the state it is given.
+        result = await _tool_node.ainvoke(
+            {
+                "messages": [response],
+                "user_id": state.get("user_id"),
+                "conversation_id": state.get("conversation_id"),
+            },
+            config,
+        )
+        produced.extend([response, *result["messages"]])
+        rounds += 1
+    return {"messages": produced}
 
 
 def _format_notes(steps: list[str], notes: list[str]) -> str:

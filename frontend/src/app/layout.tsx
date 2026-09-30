@@ -21,7 +21,7 @@ const doc = Noto_Naskh_Arabic({
 });
 
 export const metadata: Metadata = {
-  title: "Sovereign AI",
+  title: "Bayan",
   description: "Read, correct and chat with Arabic and English documents.",
 };
 
