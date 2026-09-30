@@ -178,6 +178,12 @@ Backend is 7 Django apps and 40+ endpoints; frontend is Next.js 15 with Tailwind
 - **Grapheme-aware diffing.** `مَكْتَبَة` is 5 graphemes but 9 codepoints, so every
   diff goes through `\X` rather than naive `difflib`.
 
+### Retrieval quality roadmap
+
+Per-chunk metadata, contextual headers, weighted lexical search and reranking —
+the design, the evidence behind it and the implementation checklist live in
+[RAG_CHUNK_METADATA_PLAN.md](RAG_CHUNK_METADATA_PLAN.md).
+
 ### Anti-hallucination
 
 The AI "improve" feature is guarded five ways:
