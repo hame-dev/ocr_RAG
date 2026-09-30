@@ -185,7 +185,7 @@ queries **before** the retrieval changes land and keep the baseline JSON.
 ## 6. Implementation checklist
 
 - [x] **0a.** This document, linked from the README.
-- [ ] **0.** `rag_eval` management command + metric tests + Makefile target; capture the baseline.
+- [x] **0.** `rag_eval` management command + metric tests + Makefile target; capture the baseline.
 - [ ] **1.** Chunker fixes: overlap never crosses a page, `page_start` correct, section heading persists across pages, tighter heading detection, tail chunk carries section/meta. Tests in `tests/unit/test_chunking.py`.
 - [ ] **2.** `rag/context.py` (header builder) and `rag/keywords.py` (YAKE, ar/en/mixed) + `yake` dependency.
 - [ ] **3.** Schema (`keywords_text`, `context_text`, `title_text`, `ChunkContext`, `DocumentVector`, `IndexRun.context_*`), migration 0003 with the weighted `tsv`, stage-1 indexing writes the new fields, `format_hits` exposes them, `reindex_all` command.
