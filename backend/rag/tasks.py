@@ -14,7 +14,7 @@ from documents.models import Document
 from rag.chunking import chunk_text
 from rag.context import build_context_header, build_context_text, embed_input
 from rag.keywords import extract_keywords, keywords_text
-from rag.models import Chunk, IndexRun
+from rag.models import Chunk, DocumentVector, IndexRun
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +40,40 @@ def chunk_meta(text: str, keywords: list[str]) -> dict:
         "context_version": 0,
         "text_sha256": sha256(text),
     }
+
+
+def document_vector_text(document, record) -> str:
+    """What the document-level vector embeds: identity, gist and vocabulary."""
+    parts = [
+        document_title(document, record),
+        record.summary_long or record.summary_short,
+        ", ".join(record.keywords or []),
+        ", ".join(record.topics or []),
+    ]
+    return "\n".join(p.strip() for p in parts if p and p.strip())
+
+
+def upsert_document_vector(document, record, client) -> bool:
+    """Create or refresh the document's vector. True when it was (re)embedded.
+
+    Skipped without a metadata record (there is nothing beyond the title to
+    embed) and when the embedded text is unchanged since the last run.
+    """
+    if record is None:
+        return False
+    text = document_vector_text(document, record)
+    if not text:
+        return False
+    digest = sha256(text)
+    existing = DocumentVector.objects.filter(document=document).first()
+    if existing and existing.text_sha256 == digest and existing.model == settings.EMBED_MODEL:
+        return False
+    [vector] = client.embed([text])
+    DocumentVector.objects.update_or_create(
+        document=document,
+        defaults={"embedding": vector, "text_sha256": digest, "model": settings.EMBED_MODEL},
+    )
+    return True
 
 
 @shared_task(name="rag.tasks.index_document")
@@ -124,6 +158,12 @@ def index_document(document_id: str):
         with transaction.atomic():
             Chunk.objects.filter(document=document).delete()
             Chunk.objects.bulk_create(rows, batch_size=100)
+
+        try:
+            upsert_document_vector(document, record, client)
+        except Exception:
+            # Only cross-document listing degrades without it; never fail the index.
+            logger.warning("document vector failed for %s", document_id, exc_info=True)
 
         run.chunk_count = len(rows)
         run.status = "succeeded"

@@ -14,6 +14,7 @@ from langchain_core.tools import tool
 from langgraph.prebuilt import InjectedState
 
 from chat.research import research_profile
+from common.ollama import get_client
 from rag.search import format_hits, hybrid_search
 
 logger = logging.getLogger(__name__)
@@ -112,18 +113,32 @@ async def list_documents(
     lang: str | None = None,
     limit: int = 20,
 ) -> list[dict]:
-    """List the documents in the library.
+    """List the documents in the library, or find which documents are about a topic.
 
-    Use this first for questions like "what documents do I have about X" before
-    searching inside their contents.
+    Use this first for questions like "which documents mention X", "what do I
+    have about Y" or "which contracts involve Z", before searching inside their
+    contents. With `query`, documents are ranked by meaning (title, summary,
+    keywords and topics), in any language, most relevant first; `similarity`
+    says how close each one is. Without `query`, it lists the library.
     """
+    query = (query or "").strip() or None
+    query_vector = None
+    if query:
+        try:
+            [query_vector] = await sync_to_async(get_client().embed, thread_sensitive=False)([query])
+        except Exception:
+            logger.warning("list_documents: query embedding failed; title/keyword match only", exc_info=True)
 
     @sync_to_async(thread_sensitive=True)
     def _load():
-        from documents.models import Document
+        from django.db.models import Q
+        from pgvector.django import CosineDistance
 
         from common.ownership import CHAT_READY_STATUSES
+        from documents.models import Document
+        from rag.models import DocumentVector
 
+        cap = max(1, min(limit, 50))
         # Same readiness rule as the chat scope, so every document the agent
         # can search is also one it can list.
         qs = Document.objects.select_related("metadata").filter(
@@ -133,10 +148,29 @@ async def list_documents(
             qs = qs.filter(metadata__doc_type=doc_type)
         if lang:
             qs = qs.filter(metadata__primary_language=lang)
-        if query:
-            qs = qs.filter(title__icontains=query) | qs.filter(
-                metadata__keywords__overlap=[query]
-            )
+
+        similarity: dict = {}
+        if not query:
+            docs = list(qs.distinct()[:cap])
+        else:
+            # Semantic order first, then exact title/keyword matches the
+            # vectors missed (e.g. documents indexed before vectors existed).
+            if query_vector is not None:
+                ranked = (
+                    DocumentVector.objects.filter(document__in=qs)
+                    .annotate(distance=CosineDistance("embedding", query_vector))
+                    .order_by("distance")
+                    .values_list("document_id", "distance")[:cap]
+                )
+                similarity = {doc_id: round(1 - float(distance), 3) for doc_id, distance in ranked}
+            matched = qs.filter(
+                Q(title__icontains=query) | Q(metadata__keywords__overlap=[query])
+            ).distinct()[:cap]
+            by_id = {d.id: d for d in qs.filter(id__in=list(similarity))}
+            docs = [by_id[i] for i in similarity if i in by_id]
+            docs += [d for d in matched if d.id not in similarity]
+            docs = docs[:cap]
+
         return [
             {
                 "document_id": str(d.id),
@@ -145,8 +179,9 @@ async def list_documents(
                 "summary": getattr(d, "metadata", None) and d.metadata.summary_short or "",
                 "page_count": d.page_count,
                 "languages": d.detected_languages,
+                **({"similarity": similarity[d.id]} if d.id in similarity else {}),
             }
-            for d in qs.distinct()[: min(limit, 50)]
+            for d in docs
         ]
 
     return await _load()
