@@ -64,6 +64,7 @@ hijri-converter==2.3.1     # real Arabic documents carry both calendars
 python-bidi==0.6.6
 arabic-reshaper==3.0.0
 rapidfuzz==3.13.0          # levenshtein for correction guards + citation matching
+yake==0.4.8                # per-chunk keywords, statistical (no LLM), ships Arabic stopwords
 
 # ---- Config / validation ----------------------------------------------------
 pydantic==2.11.7
