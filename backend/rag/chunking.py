@@ -82,18 +82,40 @@ class ChunkDraft:
 
 
 _HEADING_NUMBER = re.compile(r"^\s*(\d+(?:\.\d+)*)[.)\s]")
+# "Page 3 of 12", "3 / 12", "صفحة ٣", "٣ من ١٢", "- 4 -": page furniture, never a heading.
+_PAGE_NUMBER = re.compile(
+    r"^\s*[-–—.\s]*(page|p\.|صفحة|ص)?\s*[\d٠-٩]+\s*((of|/|من|-)\s*[\d٠-٩]+)?[-–—.\s]*$",
+    re.IGNORECASE,
+)
 
 
-def _is_heading(line: str) -> bool:
+def _is_heading(line: str, *, block_lines: int = 2) -> bool:
+    """Whether a block's first line reads as a section heading.
+
+    Headings now persist across pages, so a false positive costs more than it
+    used to: a page number would become the section of the rest of the
+    document. Hence the extra rejections below.
+    """
     stripped = line.strip()
     if not stripped or len(stripped) > 80:
+        return False
+    if _PAGE_NUMBER.match(stripped):
+        return False
+    letters = sum(1 for ch in stripped if ch.isalpha())
+    if letters < 3 or (len(stripped) - letters) / len(stripped) > 0.4:
         return False
     if _HEADING_NUMBER.match(stripped):
         return True
     if stripped.isupper() and len(stripped) > 3:
         return True
-    # Short line with no terminal punctuation reads as a heading in both scripts.
-    return len(stripped) < 60 and not stripped.endswith((".", "،", "۔", ":", ";"))
+    # A short line with no terminal punctuation reads as a heading in both
+    # scripts — but only when something follows it in the same block; a lone
+    # line (a caption, a stamp) is not the section for everything after it.
+    return (
+        block_lines >= 2
+        and len(stripped) < 60
+        and not stripped.endswith((".", "،", "۔", ":", ";"))
+    )
 
 
 def _split_recursive(text: str, max_tokens: int) -> list[str]:
@@ -155,48 +177,58 @@ def chunk_text(
     """Chunk a finalized revision.
 
     Pages are a HARD boundary: a chunk never spans a page break unless the
-    trailing fragment is too small to stand alone. Page-accurate citations are
-    worth more than perfectly even chunk sizes — the user has to be able to
-    click a citation and land on the right page image.
+    trailing fragment is too small to stand alone, and the overlap tail is
+    never carried across one. Page-accurate citations are worth more than
+    perfectly even chunk sizes — the user has to be able to click a citation
+    and land on the right page image.
     """
     drafts: list[ChunkDraft] = []
     pages = text.split("\f")
     index = 0
+    # `carry` is text prepended to the next block. Two kinds, treated
+    # differently at a page break: an "overlap" carry (the tail of the previous
+    # chunk, for continuity) is dropped so the first chunk of a page starts on
+    # that page; a "fragment" carry (a block too small to stand alone) is kept
+    # and remembers the page it came from.
     carry = ""
+    carry_kind = ""
     carry_page = 1
+    # The section heading persists across pages until a new heading appears.
+    section_path = ""
 
     for page_offset, page_text in enumerate(pages):
         page_number = page_offset + 1
         if not page_text.strip():
             continue
+        if carry_kind == "overlap":
+            carry, carry_kind = "", ""
 
-        section_path = ""
         blocks = _split_recursive(page_text, max_tokens)
 
         for block in blocks:
             if not block.strip():
                 continue
 
-            first_line = block.strip().split("\n")[0]
-            if _is_heading(first_line):
-                section_path = first_line.strip()[:120]
+            lines = block.strip().split("\n")
+            if _is_heading(lines[0], block_lines=len(lines)):
+                section_path = lines[0].strip()[:120]
 
             body = f"{carry}\n{block}" if carry else block
-            carry = ""
+            body_page = carry_page if carry_kind == "fragment" else page_number
+            carry, carry_kind = "", ""
             tokens = count_tokens(body)
 
             if tokens < min_tokens:
                 # Too small to stand alone: carry it into the next block, even
                 # across a page break.
-                carry = body
-                carry_page = page_number if not carry else carry_page
+                carry, carry_kind, carry_page = body, "fragment", body_page
                 continue
 
             drafts.append(
                 ChunkDraft(
                     text=body.strip(),
                     chunk_index=index,
-                    page_start=carry_page if carry_page < page_number else page_number,
+                    page_start=min(body_page, page_number),
                     page_end=page_number,
                     section_path=section_path,
                     lang=detect_lang(body),
@@ -206,21 +238,24 @@ def chunk_text(
                 )
             )
             index += 1
-            carry_page = page_number
 
             if overlap_tokens > 0:
-                carry = _overlap_tail(body, overlap_tokens)
+                carry, carry_kind, carry_page = _overlap_tail(body, overlap_tokens), "overlap", page_number
 
-    if carry.strip() and count_tokens(carry) >= 16:
+    # Only a genuine fragment becomes a tail chunk; an overlap carry is text
+    # that already lives in the previous chunk.
+    if carry_kind == "fragment" and carry.strip() and count_tokens(carry) >= 16:
         drafts.append(
             ChunkDraft(
                 text=carry.strip(),
                 chunk_index=index,
                 page_start=carry_page,
                 page_end=len(pages),
+                section_path=section_path,
                 lang=detect_lang(carry),
                 token_count=count_tokens(carry),
                 char_count=len(carry),
+                meta={"arabic_ratio": round(arabic_char_ratio(carry), 3)},
             )
         )
 
