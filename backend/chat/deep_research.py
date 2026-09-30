@@ -172,6 +172,14 @@ def _passages(retrieved: dict[str, dict]) -> str:
     hits = sorted(retrieved.values(), key=lambda h: h.get("score") or 0, reverse=True)[:MAX_PASSAGES]
     return "\n\n".join(
         f"[chunk_id: {h['chunk_id']}] {h.get('document_title') or ''}, "
-        f"page {h.get('page_start') or '?'}\n{h.get('text') or ''}"
+        f"page {h.get('page_start') or '?'}\n{_section_line(h)}{h.get('text') or ''}"
         for h in hits
     )
+
+
+def _section_line(hit: dict) -> str:
+    """Where the passage sits, so the writer can tell same-looking passages apart."""
+    section = " ".join((hit.get("section") or "").split())
+    context = " ".join((hit.get("context") or "").split())
+    line = ". ".join(part for part in (section, context) if part)
+    return f"Section: {line}\n" if line else ""

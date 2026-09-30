@@ -265,14 +265,3 @@ def chunk_text(
 
     return drafts
 
-
-def embed_text(draft: ChunkDraft) -> str:
-    """What actually gets embedded.
-
-    Prefixing the section heading is cheap and measurably improves retrieval on
-    structured documents, because an isolated clause often loses the context
-    that makes it findable.
-    """
-    if draft.section_path:
-        return f"{draft.section_path}\n{draft.text}"
-    return draft.text

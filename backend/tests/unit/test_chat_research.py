@@ -188,3 +188,15 @@ async def test_search_retries_without_guessed_filters_when_they_match_nothing(mo
     assert calls[1].get("doc_type") is None
     # The ownership scope is never dropped, only the guessed filters.
     assert all(call["doc_ids"] == allowed for call in calls)
+
+
+def test_deep_research_passages_carry_section_and_context():
+    from chat.deep_research import _passages
+
+    text = _passages({
+        "a": {"chunk_id": "a", "document_title": "Lease", "page_start": 2, "text": "Rent is 1000.",
+              "section": "2. Payment", "context": "When rent is due.", "score": 1},
+        "b": {"chunk_id": "b", "document_title": "Lease", "page_start": 3, "text": "Signed.", "score": 0.5},
+    })
+    assert "page 2\nSection: 2. Payment. When rent is due.\nRent is 1000." in text
+    assert "page 3\nSigned." in text

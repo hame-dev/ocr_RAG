@@ -10,6 +10,7 @@ queries whose spelling doesn't quite match the OCR's.
 """
 from __future__ import annotations
 
+import json
 import logging
 
 from django.db import connection, transaction
@@ -58,6 +59,7 @@ fused AS (
 )
 SELECT c.id, c.document_id, d.title, d.original_filename,
        c.page_start, c.page_end, c.text, c.section_path, c.lang, c.meta,
+       c.keywords_text, c.context_text,
        fu.rrf, fu.rank_vec, fu.rank_fts
 FROM fused fu
 JOIN rag_chunk c ON c.id = fu.id
@@ -83,6 +85,7 @@ fts AS (
 )
 SELECT c.id, c.document_id, d.title, d.original_filename,
        c.page_start, c.page_end, c.text, c.section_path, c.lang, c.meta,
+       c.keywords_text, c.context_text,
        %(wl)s / (%(k)s + f.rnk) AS rrf, NULL::bigint AS rank_vec, f.rnk AS rank_fts
 FROM fts f
 JOIN rag_chunk c ON c.id = f.id
@@ -93,6 +96,7 @@ ORDER BY f.rnk;
 TRIGRAM_FALLBACK_SQL = """
 SELECT c.id, c.document_id, d.title, d.original_filename,
        c.page_start, c.page_end, c.text, c.section_path, c.lang, c.meta,
+       c.keywords_text, c.context_text,
        similarity(c.text_norm, ar_normalize_v1(%(qtext)s)) AS rrf,
        NULL::bigint AS rank_vec, NULL::bigint AS rank_fts
 FROM rag_chunk c
@@ -106,6 +110,7 @@ LIMIT %(top_k)s;
 COLUMNS = [
     "chunk_id", "document_id", "document_title", "original_filename",
     "page_start", "page_end", "text", "section_path", "lang", "meta",
+    "keywords_text", "context_text",
     "score", "rank_vec", "rank_fts",
 ]
 
@@ -160,7 +165,18 @@ def hybrid_search(
             cursor.execute(TRIGRAM_FALLBACK_SQL, params)
             rows = cursor.fetchall()
 
-    return [dict(zip(COLUMNS, row)) for row in rows]
+    return [_row(row) for row in rows]
+
+
+def _row(row) -> dict:
+    hit = dict(zip(COLUMNS, row))
+    # Django's psycopg setup returns jsonb from a raw cursor as text.
+    if isinstance(hit["meta"], str):
+        try:
+            hit["meta"] = json.loads(hit["meta"])
+        except ValueError:
+            hit["meta"] = {}
+    return hit
 
 
 def _vector_literal(vector: list[float]) -> str:
@@ -168,7 +184,12 @@ def _vector_literal(vector: list[float]) -> str:
 
 
 def format_hits(hits: list[dict], max_chars: int = 1200) -> list[dict]:
-    """Shape hits for the agent's tool output — compact, with citation handles."""
+    """Shape hits for the agent's tool output — compact, with citation handles.
+
+    `context` is the stage-2 section summary (empty until it has run) and
+    `keywords` the chunk's own keywords, so the agent can tell passages apart
+    without reading every one in full.
+    """
     return [
         {
             "chunk_id": str(hit["chunk_id"]),
@@ -177,8 +198,16 @@ def format_hits(hits: list[dict], max_chars: int = 1200) -> list[dict]:
             "page_start": hit["page_start"],
             "page_end": hit["page_end"],
             "section": hit["section_path"],
+            "context": _chunk_meta(hit).get("summary") or "",
+            "keywords": list(_chunk_meta(hit).get("keywords") or []),
             "text": hit["text"][:max_chars],
             "score": round(float(hit["score"] or 0), 5),
         }
         for hit in hits
     ]
+
+
+def _chunk_meta(hit: dict) -> dict:
+    meta = hit.get("meta") or {}
+    chunk = meta.get("chunk") if isinstance(meta, dict) else None
+    return chunk if isinstance(chunk, dict) else {}

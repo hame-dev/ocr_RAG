@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import logging
 import time
 
@@ -10,12 +11,35 @@ from django.db import transaction
 from common import fsm
 from common.ollama import get_client
 from documents.models import Document
-from rag.chunking import chunk_text, embed_text
+from rag.chunking import chunk_text
+from rag.context import build_context_header, build_context_text, embed_input
+from rag.keywords import extract_keywords, keywords_text
 from rag.models import Chunk, IndexRun
 
 logger = logging.getLogger(__name__)
 
 EMBED_BATCH = 16
+# Bumped when the stage-2 output format changes; 0 means "stage 1 only".
+CONTEXT_VERSION = 1
+
+
+def sha256(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def document_title(document, record) -> str:
+    return (record.title if record and record.title else "") or document.display_title
+
+
+def chunk_meta(text: str, keywords: list[str]) -> dict:
+    """The chunk's own metadata, stored under meta["chunk"]."""
+    return {
+        "keywords": keywords,
+        "summary": "",
+        "context_model": "",
+        "context_version": 0,
+        "text_sha256": sha256(text),
+    }
 
 
 @shared_task(name="rag.tasks.index_document")
@@ -50,14 +74,22 @@ def index_document(document_id: str):
 
         record = getattr(document, "metadata", None)
         base_meta = record.filter_meta() if record else {}
+        title = document_title(document, record)
+        summary = record.summary_short if record else ""
 
         client = get_client()
         rows: list[Chunk] = []
 
         for start in range(0, len(drafts), EMBED_BATCH):
             batch = drafts[start : start + EMBED_BATCH]
-            vectors = client.embed([embed_text(d) for d in batch])
-            for draft, vector in zip(batch, vectors):
+            keywords = [extract_keywords(d.text, d.lang) for d in batch]
+            # The header (document + section) is embedded with the text but
+            # never stored in `text`, so citations and quotes stay raw.
+            vectors = client.embed([
+                embed_input(build_context_header(title, summary, d.section_path), d.text)
+                for d in batch
+            ])
+            for draft, vector, kws in zip(batch, vectors, keywords):
                 rows.append(
                     Chunk(
                         document=document,
@@ -72,7 +104,10 @@ def index_document(document_id: str):
                         char_count=draft.char_count,
                         # Document metadata is denormalized onto every chunk so
                         # filtered search never needs a join.
-                        meta={**base_meta, **draft.meta},
+                        meta={**base_meta, **draft.meta, "chunk": chunk_meta(draft.text, kws)},
+                        keywords_text=keywords_text(kws),
+                        context_text=build_context_text(draft.section_path, ""),
+                        title_text=title,
                         embedding=vector,
                     )
                 )

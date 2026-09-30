@@ -1,4 +1,4 @@
-.PHONY: help up down build logs migrate warmup smoke test test-runner test-frontend fixtures seed createuser claim shell psql clean ps rag-eval
+.PHONY: help up down build logs migrate warmup smoke test test-runner test-frontend fixtures seed createuser claim shell psql clean ps rag-eval reindex-all
 
 COMPOSE := docker compose
 
@@ -39,6 +39,9 @@ test:   ## Run the backend test suite
 rag-eval: ## Score retrieval against a query set (make rag-eval F=queries.jsonl U=alice [ARGS=--compare])
 	@test -n "$(F)" -a -n "$(U)" || (echo "usage: make rag-eval F=<queries.jsonl> U=<username> [ARGS=--compare]" && exit 1)
 	$(COMPOSE) run --rm -v $(abspath $(F)):/eval/queries.jsonl:ro backend python manage.py rag_eval --file /eval/queries.jsonl --user $(U) $(ARGS)
+
+reindex-all: ## Re-index every document with per-chunk metadata (ARGS=--only-missing | --contextualize-only)
+	$(COMPOSE) run --rm backend python manage.py reindex_all $(ARGS)
 
 test-frontend: ## Production-build the frontend (next build also typechecks)
 	docker build --target build -f docker/frontend/Dockerfile frontend
