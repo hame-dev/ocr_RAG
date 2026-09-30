@@ -28,6 +28,7 @@ class Command(BaseCommand):
         parser.add_argument("--user", required=True, help="Username whose documents are searched.")
         parser.add_argument("--top-k", type=int, default=10)
         parser.add_argument("--candidates", type=int, default=None, help="Fused rows fetched before reranking.")
+        parser.add_argument("--rerank", action="store_true", help="Force the reranker on for this run.")
         parser.add_argument("--no-rerank", action="store_true", help="Disable the reranker for this run.")
         parser.add_argument("--compare", action="store_true", help="Run with and without the reranker.")
         parser.add_argument("--json-out", default=None, help="Write the report(s) to this path.")
@@ -57,11 +58,7 @@ class Command(BaseCommand):
                     kwargs["rerank"] = rerank
                 if options["candidates"] is not None:
                     kwargs["candidates"] = options["candidates"]
-                try:
-                    hits = hybrid_search(query, **kwargs)
-                except TypeError:
-                    # Older hybrid_search without rerank/candidates keyword arguments.
-                    hits = hybrid_search(query, top_k=options["top_k"], doc_ids=doc_ids)
+                hits = hybrid_search(query, **kwargs)
                 latencies.append(time.monotonic() - started)
                 return hits
 
@@ -73,7 +70,8 @@ class Command(BaseCommand):
         if options["compare"]:
             reports = {"rerank": run(True), "no_rerank": run(False)}
         else:
-            reports = {"run": run(False if options["no_rerank"] else None)}
+            forced = True if options["rerank"] else False if options["no_rerank"] else None
+            reports = {"run": run(forced)}
 
         for name, report in reports.items():
             self.stdout.write(self.style.MIGRATE_HEADING(name))

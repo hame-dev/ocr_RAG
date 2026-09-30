@@ -48,11 +48,23 @@ def search(request):
     except (TypeError, ValueError):
         return Response({"detail": "top_k must be an integer"}, status=status.HTTP_400_BAD_REQUEST)
 
+    rerank = request.data.get("rerank")
+    if rerank is not None and not isinstance(rerank, bool):
+        return Response({"detail": "rerank must be true or false"}, status=status.HTTP_400_BAD_REQUEST)
+    candidates = request.data.get("candidates")
+    if candidates is not None:
+        try:
+            candidates = max(1, min(int(candidates), 50))
+        except (TypeError, ValueError):
+            return Response({"detail": "candidates must be an integer"}, status=status.HTTP_400_BAD_REQUEST)
+
     hits = hybrid_search(
         query,
         top_k=top_k,
         doc_ids=doc_ids,
         doc_type=request.data.get("doc_type"),
         lang=request.data.get("lang"),
+        rerank=rerank,
+        candidates=candidates,
     )
     return Response({"query": query, "count": len(hits), "results": format_hits(hits)})

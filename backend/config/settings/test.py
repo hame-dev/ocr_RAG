@@ -11,3 +11,6 @@ CACHES = {"default": {"BACKEND": "django.core.cache.backends.locmem.LocMemCache"
 
 # The default PBKDF2 hasher is deliberately slow; tests create many users.
 PASSWORD_HASHERS = ["django.contrib.auth.hashers.MD5PasswordHasher"]
+
+# Nothing in the suite talks to a real Ollama: no reranker, no stage-2 LLM pass.
+RERANK_ENABLED = False

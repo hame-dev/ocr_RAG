@@ -10,6 +10,7 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import math
 from typing import Any, Iterator
 
 import httpx
@@ -124,6 +125,51 @@ class OllamaClient:
             return json.loads(raw), raw
         except json.JSONDecodeError:
             return None, raw
+
+    def score_yes_no(
+        self,
+        model: str,
+        prompt: str,
+        *,
+        timeout: float = 5.0,
+        num_ctx: int = 2048,
+    ) -> float:
+        """P(yes) / (P(yes) + P(no)) for the next token after a raw prompt.
+
+        How a Qwen3-Reranker is scored: one generated token, read from the
+        logprobs rather than the text. "yes" is summed over its spellings
+        ("yes", "Yes", " yes"). 0.0 when neither answer is among the top tokens.
+        The small num_ctx matters: without it a 0.6B model allocates the
+        default 16k KV cache for a ~500-token prompt.
+        """
+        body = {
+            "model": model,
+            "prompt": prompt,
+            "raw": True,
+            "stream": False,
+            "logprobs": True,
+            "top_logprobs": 10,
+            "keep_alive": "30m",
+            "options": {"num_predict": 1, "temperature": 0, "num_ctx": num_ctx},
+        }
+        try:
+            r = httpx.post(f"{self.base_url}/api/generate", json=body, timeout=timeout)
+            r.raise_for_status()
+        except httpx.HTTPError as exc:
+            raise OllamaError(f"score failed for {model}: {exc}") from exc
+
+        steps = r.json().get("logprobs") or []
+        if not steps:
+            raise OllamaError(f"{model} returned no logprobs (Ollama too old?)")
+        first = steps[0]
+        candidates = {t["token"]: t["logprob"] for t in first.get("top_logprobs") or []}
+        candidates.setdefault(first.get("token", ""), first.get("logprob", float("-inf")))
+
+        def mass(word: str) -> float:
+            return sum(math.exp(lp) for token, lp in candidates.items() if token.strip().lower() == word)
+
+        p_yes, p_no = mass("yes"), mass("no")
+        return p_yes / (p_yes + p_no) if p_yes + p_no > 0 else 0.0
 
     def chat_stream(
         self,

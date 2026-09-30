@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import logging
 
+from django.conf import settings
 from django.db import connection, transaction
 
 from common.ollama import get_client
@@ -122,7 +123,17 @@ def hybrid_search(
     doc_ids: list[str] | None = None,
     doc_type: str | None = None,
     lang: str | None = None,
+    rerank: bool | None = None,
+    candidates: int | None = None,
 ) -> list[dict]:
+    """Top `top_k` chunks for `query`.
+
+    With reranking (default: settings.RERANK_ENABLED), `candidates` fused rows
+    (default: settings.RERANK_CANDIDATES) are fetched and reordered by the
+    reranker; any reranker failure returns the RRF order instead. `rrf`,
+    `rank_vec` and `rank_fts` are always kept on each hit; `score` is the
+    reranker probability when reranked, otherwise the fused score.
+    """
     if not query or not query.strip():
         return []
     # `None` means "no restriction"; an empty list means "nothing is in scope"
@@ -136,19 +147,41 @@ def hybrid_search(
         logger.warning("query embedding failed; lexical only", exc_info=True)
         vector = None
 
+    if rerank is None:
+        rerank = settings.RERANK_ENABLED
+    if rerank:
+        limit = max(top_k, candidates or settings.RERANK_CANDIDATES)
+    else:
+        limit = top_k
+
     params = {
         "qtext": query,
         "qvec": _vector_literal(vector) if vector else None,
         "doc_ids": list(doc_ids) if doc_ids is not None else None,
         "doc_type": doc_type,
         "lang": lang,
-        "top_k": top_k,
+        "top_k": limit,
         "candidates": CANDIDATES,
         "k": float(RRF_K),
         "wv": VECTOR_WEIGHT,
         "wl": LEXICAL_WEIGHT,
     }
 
+    hits = _fetch(query, params, vector)
+    for hit in hits:
+        hit["rrf"] = hit["score"]
+    if not rerank or len(hits) <= 1:
+        return hits[:top_k]
+    try:
+        from rag import rerank as reranker
+
+        return reranker.rerank(query, hits, top_k=top_k)
+    except Exception:
+        logger.warning("reranking failed; returning the RRF order", exc_info=True)
+        return hits[:top_k]
+
+
+def _fetch(query: str, params: dict, vector: list[float] | None) -> list[dict]:
     # SET LOCAL lasts until the end of the transaction; under autocommit it
     # would end with the SET itself and have no effect.
     with transaction.atomic(), connection.cursor() as cursor:

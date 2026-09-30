@@ -189,7 +189,7 @@ queries **before** the retrieval changes land and keep the baseline JSON.
 - [x] **1.** Chunker fixes: overlap never crosses a page, `page_start` correct, section heading persists across pages, tighter heading detection, tail chunk carries section/meta. Tests in `tests/unit/test_chunking.py`.
 - [x] **2.** `rag/context.py` (header builder) and `rag/keywords.py` (YAKE, ar/en/mixed) + `yake` dependency.
 - [x] **3.** Schema (`keywords_text`, `context_text`, `title_text`, `ChunkContext`, `DocumentVector`, `IndexRun.context_*`), migration 0003 with the weighted `tsv`, stage-1 indexing writes the new fields, `format_hits` exposes them, `reindex_all` command.
-- [ ] **4.** Reranker: `OllamaClient.score_yes_no`, `rag/rerank.py`, `hybrid_search(rerank=, candidates=)`, settings, warmup script.
+- [x] **4.** Reranker: `OllamaClient.score_yes_no`, `rag/rerank.py`, `hybrid_search(rerank=, candidates=)`, settings, warmup script.
 - [ ] **5.** `DocumentVector` upsert during indexing; semantic `list_documents`.
 - [ ] **6.** Stage 2: `rag/contextualize.py`, `contextualize_document` task on the `llm_bg` queue, cache, in-place updates, progress events, compose/route changes.
 - [ ] **7.** `.env.example`, README, smoke test updates; run the eval before/after and record the numbers here.
