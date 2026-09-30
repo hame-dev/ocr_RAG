@@ -95,6 +95,58 @@ def delete_thread(thread_id: str) -> None:
                 cursor.execute(f"DELETE FROM {table} WHERE thread_id = %s", [thread_id])
 
 
+# Keep only the newest checkpoint per namespace, then the writes and blobs it
+# still references. LangGraph otherwise keeps every super-step of every turn,
+# and each one re-stores the message list (base64 images included).
+# Checkpoint ids are uuid6, so text order is time order.
+_PRUNE_SQL = (
+    """
+    DELETE FROM checkpoints c
+    USING (
+        SELECT DISTINCT ON (checkpoint_ns) checkpoint_ns, checkpoint_id
+        FROM checkpoints WHERE thread_id = %(t)s
+        ORDER BY checkpoint_ns, checkpoint_id DESC
+    ) latest
+    WHERE c.thread_id = %(t)s
+      AND c.checkpoint_ns = latest.checkpoint_ns
+      AND c.checkpoint_id <> latest.checkpoint_id
+    """,
+    """
+    DELETE FROM checkpoint_writes w
+    WHERE w.thread_id = %(t)s AND NOT EXISTS (
+        SELECT 1 FROM checkpoints c
+        WHERE c.thread_id = w.thread_id AND c.checkpoint_ns = w.checkpoint_ns
+          AND c.checkpoint_id = w.checkpoint_id
+    )
+    """,
+    """
+    DELETE FROM checkpoint_blobs b
+    WHERE b.thread_id = %(t)s AND NOT EXISTS (
+        SELECT 1 FROM checkpoints c
+        WHERE c.thread_id = b.thread_id AND c.checkpoint_ns = b.checkpoint_ns
+          AND c.checkpoint -> 'channel_versions' ->> b.channel = b.version
+    )
+    """,
+)
+
+
+async def prune_thread(thread_id: str) -> None:
+    """Drop a conversation's superseded checkpoints. Never raises.
+
+    Run after a turn has finished, when no run on this thread is in flight
+    (the per-conversation turn lock guarantees that).
+    """
+    if _pool is None:
+        return
+    try:
+        async with _pool.connection() as conn:
+            async with conn.transaction():
+                for sql in _PRUNE_SQL:
+                    await conn.execute(sql, {"t": str(thread_id)})
+    except Exception:
+        logger.warning("could not prune checkpoints for %s", thread_id, exc_info=True)
+
+
 def setup_sync():
     """One-time table creation. Run via `manage.py init_checkpointer`."""
     from langgraph.checkpoint.postgres import PostgresSaver

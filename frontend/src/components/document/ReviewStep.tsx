@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
@@ -47,11 +47,13 @@ interface CorrectionJob {
 }
 
 export function ReviewStep({
-  doc, onGoToExtract, onFinalized,
+  doc, onGoToExtract, onFinalized, onDirtyChange,
 }: {
   doc: DocumentDetail;
   onGoToExtract: () => void;
   onFinalized: () => void;
+  /** Lets the page confirm before switching steps away from unsaved edits. */
+  onDirtyChange?: (dirty: boolean) => void;
 }) {
   const { t } = useLocale();
   const queryClient = useQueryClient();
@@ -90,13 +92,39 @@ export function ReviewStep({
   const pageCount = Math.max(doc.pages?.length ?? 0, pages.length, 1);
   const pageInfo = doc.pages?.find((p) => p.page_number === pageIndex + 1);
 
-  // Warn before losing unsaved edits.
+  // Warn before losing unsaved edits: on reload/close, and on in-app links
+  // (the sidebar, breadcrumbs), which never fire beforeunload.
   useEffect(() => {
+    onDirtyChange?.(dirty);
     if (!dirty) return;
     const warn = (event: BeforeUnloadEvent) => event.preventDefault();
+    const guardLinks = (event: MouseEvent) => {
+      const link = (event.target as Element | null)?.closest?.("a[href]") as HTMLAnchorElement | null;
+      if (!link || link.target === "_blank" || link.origin !== window.location.origin) return;
+      if (link.pathname === window.location.pathname) return;
+      if (!window.confirm(t("leaveUnsaved"))) {
+        event.preventDefault();
+        event.stopPropagation(); // before Next's Link handler, which is below the document
+      }
+    };
     window.addEventListener("beforeunload", warn);
-    return () => window.removeEventListener("beforeunload", warn);
+    document.addEventListener("click", guardLinks, true);
+    return () => {
+      window.removeEventListener("beforeunload", warn);
+      document.removeEventListener("click", guardLinks, true);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dirty]);
+  useEffect(() => () => onDirtyChange?.(false), []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Stops the AI-correct polling loop when the step unmounts.
+  const alive = useRef(true);
+  useEffect(() => {
+    alive.current = true;
+    return () => {
+      alive.current = false;
+    };
+  }, []);
 
   if (revisionNo == null) {
     return (
@@ -157,6 +185,7 @@ export function ReviewStep({
       // Corrections are proposals; nothing is applied until the user accepts.
       for (let i = 0; i < 150; i++) {
         await new Promise((resolve) => setTimeout(resolve, 2000));
+        if (!alive.current) return; // the user left this step; stop polling quietly
         const state = await api<CorrectionJob>(`/api/ai-corrections/${job.job_id}/`);
         if (state.status === "ready") {
           if (!state.changes?.length && !state.rejected?.length) toast(t("aiNoChanges"));

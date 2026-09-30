@@ -26,8 +26,10 @@ def index_document_view(request, document_id):
 @api_view(["POST"])
 def search(request):
     """Debug/search endpoint. The agent uses the same hybrid_search underneath."""
+    if not isinstance(request.data, dict):
+        return Response({"detail": "the body must be a JSON object"}, status=status.HTTP_400_BAD_REQUEST)
     query = request.data.get("query", "")
-    if not query.strip():
+    if not isinstance(query, str) or not query.strip():
         return Response({"detail": "query is required"}, status=status.HTTP_400_BAD_REQUEST)
 
     # Always an explicit list: `None` would mean "every user's documents".

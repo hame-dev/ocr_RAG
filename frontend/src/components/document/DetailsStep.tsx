@@ -22,7 +22,7 @@ export function DetailsStep({
   plan: any;
   onRetry: () => Promise<void>;
 }) {
-  const { t } = useLocale();
+  const { t, locale } = useLocale();
 
   if (!metadata) {
     if (WORKING.includes(status)) {
@@ -159,7 +159,7 @@ export function DetailsStep({
           <CardContent className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
             {plan.proposed_fields.map((field: any) => (
               <div key={field.key} className="rounded-lg border p-3">
-                <p className="text-sm font-medium">{field.label_en ?? humanizeKey(field.key)}</p>
+                <p className="text-sm font-medium">{(locale === "ar" ? field.label_ar : field.label_en) ?? field.label_en ?? humanizeKey(field.key)}</p>
                 <p className="doc-text text-xs text-muted-foreground" dir="auto">{field.example_value}</p>
               </div>
             ))}

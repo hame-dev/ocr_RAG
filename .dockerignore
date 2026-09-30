@@ -1,0 +1,15 @@
+# Build context for the backend image is the repository root; keep it small and
+# keep secrets out of it.
+.git
+.env
+.env.*
+!.env.example
+**/.DS_Store
+**/__pycache__
+**/*.py[cod]
+**/.pytest_cache
+frontend
+docs
+assets
+backend/celerybeat-schedule*
+backend/tests/fixtures/*.pdf

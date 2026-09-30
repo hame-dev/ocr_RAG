@@ -13,6 +13,7 @@ import asyncio
 import json
 import logging
 import time
+import uuid
 
 from django.http import JsonResponse, StreamingHttpResponse
 
@@ -42,14 +43,8 @@ async def chat_stream(request, conversation_id):
     if user is None:
         return unauthorized()
 
-    from asgiref.sync import sync_to_async
-
     from chat import attachments as chat_attachments
-    from chat.code_tools import serialize_file
-    from chat.graph import (
-        FINAL_ANSWER_TAG, SCOPE_ALL, SCOPE_SELECTED, get_graph, resolve_citations,
-    )
-    from chat.models import ChatAttachment, Conversation, GeneratedFile, Message
+    from chat.models import Conversation
     from chat.research import (
         DEFAULT_CHAT_MODE,
         DEFAULT_RESEARCH_MODE,
@@ -61,10 +56,15 @@ async def chat_stream(request, conversation_id):
 
     try:
         body = json.loads(request.body or b"{}")
-    except json.JSONDecodeError:
+    except ValueError:  # JSONDecodeError, and UnicodeDecodeError on non-UTF-8 bodies
         return JsonResponse({"detail": "invalid JSON body"}, status=400)
+    if not isinstance(body, dict):
+        return JsonResponse({"detail": "the body must be a JSON object"}, status=400)
 
-    content = (body.get("content") or "").strip()
+    content = body.get("content") or ""
+    if not isinstance(content, str):
+        return JsonResponse({"detail": "content must be a string"}, status=400)
+    content = content.strip()
     if not content:
         return JsonResponse({"detail": "content is required"}, status=400)
 
@@ -93,11 +93,52 @@ async def chat_stream(request, conversation_id):
                        f"{chat_attachments.MAX_ATTACHMENTS_PER_MESSAGE}"},
             status=400,
         )
+    try:
+        attachment_ids = [str(uuid.UUID(str(a))) for a in attachment_ids]
+    except ValueError:
+        return JsonResponse({"detail": "attachment_ids must be UUIDs"}, status=400)
 
     try:
         conversation = await Conversation.objects.aget(id=conversation_id, owner=user)
     except Conversation.DoesNotExist:
         return JsonResponse({"detail": "no such conversation"}, status=404)
+
+    # One turn at a time per conversation: two concurrent runs on the same
+    # LangGraph thread each start from the same checkpoint, and one turn is
+    # silently dropped from the agent's memory.
+    lock = await _acquire_turn_lock(conversation.id)
+    if lock is None:
+        return JsonResponse(
+            {"detail": "this conversation is already answering; wait for it to finish"},
+            status=409,
+        )
+    try:
+        response = await _start_turn(
+            user, conversation, content, research_mode, chat_mode, thinking,
+            attachment_ids, lock,
+        )
+    except BaseException:
+        await _release_turn_lock(lock)
+        raise
+    if not isinstance(response, StreamingHttpResponse):
+        # Rejected before streaming; the stream's own `finally` releases otherwise.
+        await _release_turn_lock(lock)
+    return response
+
+
+async def _start_turn(user, conversation, content, research_mode, chat_mode,
+                      thinking, attachment_ids, lock):
+    """Everything after validation. Owns `lock` once the stream starts."""
+    from asgiref.sync import sync_to_async
+
+    from chat import attachments as chat_attachments
+    from chat.code_tools import serialize_file
+    from chat.graph import (
+        FINAL_ANSWER_TAG, SCOPE_ALL, SCOPE_SELECTED, get_graph, resolve_citations,
+    )
+    from chat.models import ChatAttachment, GeneratedFile, Message
+
+    conversation_id = conversation.id
 
     # Only the caller's own uploads, and only ones not already sent elsewhere.
     attachments: list[ChatAttachment] = []
@@ -118,9 +159,14 @@ async def chat_stream(request, conversation_id):
         usage={"chat_mode": chat_mode, "thinking": thinking},
     )
     if attachments:
-        await ChatAttachment.objects.filter(id__in=[a.id for a in attachments]).aupdate(
-            conversation=conversation, message=user_message
-        )
+        # Re-checked in the UPDATE itself, so an attachment raced into another
+        # message between the lookup and here is not stolen.
+        bound = await ChatAttachment.objects.filter(
+            id__in=[a.id for a in attachments], message__isnull=True
+        ).aupdate(conversation=conversation, message=user_message)
+        if bound != len(attachments):
+            await user_message.adelete()
+            return JsonResponse({"detail": "unknown or already-used attachment"}, status=404)
 
     # The agent's tools treat doc_ids=None as "the whole corpus", which spans
     # every user. Always hand the graph an explicit list of this user's
@@ -146,9 +192,12 @@ async def chat_stream(request, conversation_id):
         else:
             scope_note = SCOPE_ALL
 
+    # Always bumped, so the sidebar orders conversations by latest activity.
+    update_fields = ["updated_at"]
     if not conversation.title:
         conversation.title = content[:120]
-        await conversation.asave(update_fields=["title", "updated_at"])
+        update_fields.append("title")
+    await conversation.asave(update_fields=update_fields)
 
     async def generator():
         from langchain_core.messages import HumanMessage
@@ -185,7 +234,11 @@ async def chat_stream(request, conversation_id):
             code_runs.extend(runs)
             return runs
 
+        saved = False
+
         async def save_reply(**fields) -> Message:
+            nonlocal saved
+            saved = True
             message = await Message.objects.acreate(
                 conversation=conversation, role="assistant", tool_calls=code_runs, **fields
             )
@@ -240,7 +293,8 @@ async def chat_stream(request, conversation_id):
                     "tool_rounds": 0,
                     "retrieved": {},
                     "follow_ups": [],
-                    "summary": "",
+                    # Not "summary": it is carried over from the checkpoint,
+                    # and resetting it here would erase the summarized turns.
                 },
                 config=config,
                 version="v2",
@@ -316,6 +370,10 @@ async def chat_stream(request, conversation_id):
                         code = str(args.get("code") or "") if isinstance(args, dict) else ""
                         pending_runs[str(event.get("run_id"))] = code
                         args = {"code": code}
+                    elif isinstance(args, dict):
+                        # Injected graph state (the user's document ids, mode)
+                        # is not the model's arguments and not UI data.
+                        args = {k: v for k, v in args.items() if k not in _INJECTED_ARGS}
                     yield sse(
                         "tool_start",
                         {"name": tool_name, "phase": phase, "args": _safe(args)},
@@ -381,11 +439,14 @@ async def chat_stream(request, conversation_id):
                 },
             )
 
-        except asyncio.CancelledError:
+        except (asyncio.CancelledError, GeneratorExit):
             # The user closed the tab. Keep what was generated rather than
-            # throwing away a 30-second answer.
-            if buffer or reasoning or code_runs:
-                await save_reply(
+            # throwing away a 30-second answer. GeneratorExit too: a
+            # disconnect while suspended at a `yield` closes the generator
+            # instead of cancelling it.
+            if not saved and (buffer or reasoning or code_runs):
+                await _save_quietly(
+                    save_reply,
                     content="".join(buffer),
                     is_partial=True,
                     reasoning="".join(reasoning),
@@ -397,18 +458,96 @@ async def chat_stream(request, conversation_id):
         except Exception:
             logger.exception("chat stream failed for conversation %s", conversation_id)
             # Always record the failed turn, even with no text, so the question
-            # is never left without a reply in the transcript.
-            await save_reply(
-                content="".join(buffer),
-                is_partial=True,
-                error=GENERATION_FAILED,
-                reasoning="".join(reasoning),
-                usage={"research_mode": research_mode, "chat_mode": chat_mode, "thinking": thinking},
-            )
+            # is never left without a reply in the transcript. If that save
+            # fails too (the conversation was deleted mid-stream), the client
+            # must still get the error frame.
+            if not saved:
+                await _save_quietly(
+                    save_reply,
+                    content="".join(buffer),
+                    is_partial=True,
+                    error=GENERATION_FAILED,
+                    reasoning="".join(reasoning),
+                    usage={"research_mode": research_mode, "chat_mode": chat_mode, "thinking": thinking},
+                )
             yield sse("error", {"detail": GENERATION_FAILED})
+
+        finally:
+            from chat.checkpointer import prune_thread
+
+            try:
+                await prune_thread(conversation.thread_id)
+            finally:
+                await _release_turn_lock(lock)
 
     response = StreamingHttpResponse(generator(), content_type="text/event-stream")
     return stream_headers(response)
+
+
+# Tool arguments filled from graph state (InjectedState), not by the model.
+_INJECTED_ARGS = {"allowed_doc_ids", "research_mode", "user_id", "conversation_id"}
+
+
+# Longer than any turn can take (deep research included), so a crashed worker
+# cannot lock a conversation for more than this.
+TURN_LOCK_TTL_S = 15 * 60
+
+
+def _turn_lock_key(conversation_id) -> str:
+    return f"chat:turn:{conversation_id}"
+
+
+async def _acquire_turn_lock(conversation_id):
+    """A (key, token) pair if this request may run a turn, else None.
+
+    Redis unavailable means no lock rather than no chat.
+    """
+    import redis.asyncio as aioredis
+    from django.conf import settings
+
+    key, token = _turn_lock_key(conversation_id), uuid.uuid4().hex
+    try:
+        client = aioredis.from_url(settings.REDIS_URL)
+        try:
+            acquired = await client.set(key, token, nx=True, ex=TURN_LOCK_TTL_S)
+        finally:
+            await client.aclose()
+    except Exception:
+        logger.warning("chat turn lock unavailable; continuing without it", exc_info=True)
+        return (key, None)
+    return (key, token) if acquired else None
+
+
+# Deletes the key only if it still holds our token, so an expired lock that
+# another turn has since taken is left alone.
+_RELEASE_SCRIPT = """
+if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) end
+return 0
+"""
+
+
+async def _release_turn_lock(lock) -> None:
+    key, token = lock
+    if token is None:
+        return
+    import redis.asyncio as aioredis
+    from django.conf import settings
+
+    try:
+        client = aioredis.from_url(settings.REDIS_URL)
+        try:
+            await client.eval(_RELEASE_SCRIPT, 1, key, token)
+        finally:
+            await client.aclose()
+    except Exception:
+        logger.warning("could not release chat turn lock %s", key, exc_info=True)
+
+
+async def _save_quietly(save_reply, **fields) -> None:
+    try:
+        await save_reply(**fields)
+    except Exception:
+        logger.exception("could not save the assistant reply")
 
 
 def _phase_summary(phases: list[dict]) -> dict | None:

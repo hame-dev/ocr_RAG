@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      # The same images as local development: Postgres with pgvector, Redis,
+      # and the backend image (tesseract, weasyprint and friends).
+      - run: docker compose build db backend
+      - run: docker compose up -d --wait db redis
+      - run: docker compose run --rm --no-deps backend pytest -q
+
+  sandbox:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker compose build code-runner
+      - run: >-
+          docker compose run --rm --no-deps -v ./docker/code-runner:/src:ro
+          code-runner python -m unittest discover -s /src -v
+
+  frontend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run build

@@ -1,0 +1,16 @@
+# Everything the tests and fixture generator need on top of the runtime.
+# The compose images install this (INSTALL_DEV=1); a production image builds
+# with INSTALL_DEV=0 and gets requirements.txt only.
+-r requirements.txt
+
+# ---- Test fixtures ----------------------------------------------------------
+# WeasyPrint renders through Pango/HarfBuzz, which does Arabic shaping and the
+# bidi algorithm correctly. ReportLab does neither.
+weasyprint==70.0
+jiwer==3.1.0               # CER/WER against ground truth
+
+# ---- Tests ------------------------------------------------------------------
+pytest==8.4.1
+pytest-django==4.11.1
+pytest-asyncio==1.1.0
+responses==0.25.7

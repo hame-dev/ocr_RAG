@@ -38,9 +38,30 @@ class LoginThrottle(SimpleRateThrottle):
         # Key on client IP *and* username so one attacker cannot lock out every
         # account, and one account cannot be brute-forced from rotating IPs
         # faster than the per-IP limit allows.
-        username = str(request.data.get("username", "")).lower()[:150]
-        ident = f"{self.get_ident(request)}:{username}"
+        ident = f"{self.get_ident(request)}:{_login_username(request)}"
         return self.cache_format % {"scope": self.scope, "ident": ident}
+
+
+class LoginAccountThrottle(SimpleRateThrottle):
+    """A looser cap per account, whatever address the attempts come from.
+
+    The per-IP throttle alone lets an attacker who controls many addresses
+    guess one account's password without limit. get_ident only trusts
+    X-Forwarded-For when NUM_PROXIES says a proxy sets it, but real address
+    pools exist too.
+    """
+    scope = "login_account"
+
+    def get_cache_key(self, request, view):
+        username = _login_username(request)
+        if not username:
+            return None
+        return self.cache_format % {"scope": self.scope, "ident": username}
+
+
+def _login_username(request) -> str:
+    data = request.data if isinstance(request.data, dict) else {}
+    return str(data.get("username", "")).lower()[:150]
 
 
 class LoginSerializer(serializers.Serializer):
@@ -64,7 +85,7 @@ def csrf(request):
 @api_view(["POST"])
 @authentication_classes([])
 @permission_classes([AllowAny])
-@throttle_classes([LoginThrottle])
+@throttle_classes([LoginThrottle, LoginAccountThrottle])
 def login_view(request):
     # DRF skips CSRF for anonymous requests, but login CSRF (forcing a victim
     # into the attacker's account) is a real attack, so check it explicitly.

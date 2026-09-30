@@ -14,6 +14,10 @@ app.conf.beat_schedule = {
         "task": "ocr.tasks.probe_engine_health",
         "schedule": 60.0,
     },
+    "reap-stale-ocr-batches": {
+        "task": "ocr.tasks.reap_stale_ocr_batches",
+        "schedule": 600.0,
+    },
     "delete-stale-chat-attachments": {
         "task": "chat.tasks.delete_stale_attachments",
         "schedule": 3600.0,

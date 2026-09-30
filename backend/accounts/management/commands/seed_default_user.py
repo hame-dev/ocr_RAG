@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 
+from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.management.base import BaseCommand
 
@@ -23,6 +24,16 @@ class Command(BaseCommand):
     def handle(self, *args, **options):
         username = os.environ.get("DEFAULT_USERNAME") or DEFAULT_USERNAME
         password = os.environ.get("DEFAULT_PASSWORD") or DEFAULT_PASSWORD
+
+        # The built-in password is published in the README. Outside a debug
+        # (development) setup, never create a superuser with it.
+        if not settings.DEBUG and password == DEFAULT_PASSWORD:
+            self.stdout.write(self.style.WARNING(
+                "not seeding the default user: DEFAULT_PASSWORD is the published "
+                "default. Set DEFAULT_PASSWORD, or create an account with "
+                "`manage.py create_user`."
+            ))
+            return
 
         User = get_user_model()
         if User.objects.filter(username=username).exists():

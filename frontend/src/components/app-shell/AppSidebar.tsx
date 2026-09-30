@@ -343,7 +343,7 @@ function UserMenu({ collapsed }: { collapsed: boolean }) {
         <DropdownMenuItem asChild>
           <Link href="/settings"><Settings /> {t("settings")}</Link>
         </DropdownMenuItem>
-        <DropdownMenuItem destructive onSelect={() => void logout()}>
+        <DropdownMenuItem destructive onSelect={() => logout().catch(() => toast.error(t("signOutFailed")))}>
           <LogOut className="rtl:-scale-x-100" /> {t("signOut")}
         </DropdownMenuItem>
       </DropdownMenuContent>

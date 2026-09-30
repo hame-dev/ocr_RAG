@@ -5,6 +5,7 @@ import time
 
 from celery import shared_task
 from django.conf import settings
+from django.db import transaction
 
 from common import fsm
 from common.ollama import get_client
@@ -81,9 +82,13 @@ def index_document(document_id: str):
                 {"embedded": min(start + EMBED_BATCH, len(drafts)), "of": len(drafts)},
             )
 
-        # Re-indexing replaces cleanly by revision, so old chunks never linger.
-        Chunk.objects.filter(revision=revision).delete()
-        Chunk.objects.bulk_create(rows, batch_size=100)
+        # Replace every chunk of the document, not only this revision's: search
+        # does not filter by revision, so an earlier revision's chunks would
+        # keep surfacing text the user has since corrected. One transaction, so
+        # search never sees the document with no chunks at all.
+        with transaction.atomic():
+            Chunk.objects.filter(document=document).delete()
+            Chunk.objects.bulk_create(rows, batch_size=100)
 
         run.chunk_count = len(rows)
         run.status = "succeeded"

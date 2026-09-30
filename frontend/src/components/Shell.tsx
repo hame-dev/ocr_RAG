@@ -16,7 +16,7 @@ const COLLAPSED_KEY = "ocr-rag-sidebar-collapsed";
 
 export function Shell({ children }: { children: React.ReactNode }) {
   const { t } = useLocale();
-  const { status } = useAuth();
+  const { status, retry } = useAuth();
   const pathname = usePathname();
   const router = useRouter();
   const isLogin = pathname === "/login";
@@ -49,10 +49,28 @@ export function Shell({ children }: { children: React.ReactNode }) {
   }
 
   if (isLogin) return <>{children}</>;
+  if (status === "unreachable") {
+    // An API outage must not look like being signed out (and bounce to /login).
+    return (
+      <div className="flex h-dvh items-center justify-center bg-background p-6">
+        <div className="max-w-sm space-y-3 text-center" role="alert">
+          <h1 className="text-lg font-semibold">{t("apiUnreachable")}</h1>
+          <p className="text-sm text-muted-foreground">{t("apiUnreachableHint")}</p>
+          <Button variant="outline" onClick={retry}>{t("retry")}</Button>
+        </div>
+      </div>
+    );
+  }
   if (status !== "authenticated") return <ShellSkeleton />;
 
   return (
     <div className="flex h-dvh overflow-hidden bg-background">
+      <a
+        href="#main"
+        className="sr-only focus:not-sr-only focus:fixed focus:start-3 focus:top-3 focus:z-50 focus:rounded-md focus:bg-background focus:px-3 focus:py-2 focus:shadow"
+      >
+        {t("skipToContent")}
+      </a>
       <aside
         className={`hidden shrink-0 border-e bg-sidebar transition-[width] duration-200 lg:block ${
           collapsed ? "w-[60px]" : "w-64"

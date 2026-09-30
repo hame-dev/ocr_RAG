@@ -215,6 +215,7 @@ function RunProgress({ progress, engines }: { progress: Record<string, EnginePro
 
   const statusLabel: Record<string, StringKey> = {
     queued: "queued", running: "running", succeeded: "succeeded", failed: "failed", timeout: "failed",
+    skipped: "skipped", cancelled: "cancelled",
   };
 
   return (

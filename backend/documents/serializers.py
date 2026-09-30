@@ -83,6 +83,48 @@ class DocumentDetailSerializer(DocumentListSerializer):
 IMAGE_FORMATS = {"PNG", "JPEG", "TIFF", "WEBP", "BMP"}
 
 
+# The highest DPI any preprocessing profile renders at (ocr/preprocess/profiles.py).
+MAX_RENDER_DPI = 300
+
+
+def _too_big(upload, mime: str) -> str | None:
+    """Why this file would be too expensive to preprocess, or None.
+
+    The byte limit alone does not bound the work: a small PDF can have
+    thousands of pages or a poster-sized page, and a small PNG can declare
+    huge dimensions. Every page is rasterized, so these are checked up front.
+    """
+    max_pages = settings.MAX_UPLOAD_PAGES
+    max_pixels = settings.MAX_PAGE_PIXELS
+    try:
+        if mime == "application/pdf":
+            import pypdfium2 as pdfium
+
+            pdf = pdfium.PdfDocument(upload.read())
+            try:
+                if len(pdf) > max_pages:
+                    return f"the PDF has {len(pdf)} pages; the limit is {max_pages}"
+                scale = MAX_RENDER_DPI / 72.0
+                for index in range(len(pdf)):
+                    width, height = pdf.get_page_size(index)
+                    if width * scale * height * scale > max_pixels:
+                        return f"page {index + 1} is too large to process"
+            finally:
+                pdf.close()
+        else:
+            from PIL import Image
+
+            with Image.open(upload) as image:
+                width, height = image.size
+            if width * height > max_pixels:
+                return "the image is too large to process"
+    except Exception:
+        return None  # unreadable here: preprocessing reports it properly
+    finally:
+        upload.seek(0)
+    return None
+
+
 def sniff_mime(upload) -> str | None:
     """The upload's real type from its content, or None if it is unsupported.
 
@@ -126,6 +168,8 @@ class UploadSerializer(serializers.Serializer):
         mime = sniff_mime(upload)
         if mime is None:
             raise serializers.ValidationError("only PDF and image files are supported")
+        if reason := _too_big(upload, mime):
+            raise serializers.ValidationError(reason)
         upload.sniffed_mime = mime
         return upload
 

@@ -33,9 +33,12 @@ WORKDIR /app
 
 # Upgrading pip first matters on 3.13: older pip resolves some of the pinned
 # wheels to sdists and then tries to compile them.
-COPY backend/requirements.txt /app/requirements.txt
+# INSTALL_DEV=1 (the compose default) adds pytest and the fixture tools, so
+# `make test` runs in this image. Build a production image with INSTALL_DEV=0.
+ARG INSTALL_DEV=1
+COPY backend/requirements.txt backend/requirements-dev.txt /app/
 RUN pip install --upgrade pip setuptools wheel \
-    && pip install -r /app/requirements.txt
+    && pip install -r /app/requirements$( [ "$INSTALL_DEV" = "1" ] && echo "-dev" ).txt
 
 COPY backend/ /app/
 

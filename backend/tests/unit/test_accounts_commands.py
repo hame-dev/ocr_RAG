@@ -56,7 +56,8 @@ def test_claim_unowned_assigns_only_rows_without_an_owner(user, other_user):
     assert orphan_chat.owner == user
 
 
-def test_seed_default_user_creates_the_login_once(monkeypatch):
+def test_seed_default_user_creates_the_login_once(monkeypatch, settings):
+    settings.DEBUG = True  # the published default password is for development only
     monkeypatch.delenv("DEFAULT_USERNAME", raising=False)
     monkeypatch.delenv("DEFAULT_PASSWORD", raising=False)
 
@@ -73,3 +74,13 @@ def test_seed_default_user_creates_the_login_once(monkeypatch):
     user.refresh_from_db()
     assert user.check_password("changed-after-seeding")
     assert get_user_model().objects.filter(username="NCST_system").count() == 1
+
+
+def test_seed_refuses_the_published_password_outside_debug(monkeypatch, settings):
+    settings.DEBUG = False
+    monkeypatch.delenv("DEFAULT_USERNAME", raising=False)
+    monkeypatch.delenv("DEFAULT_PASSWORD", raising=False)
+
+    call_command("seed_default_user", stdout=io.StringIO())
+
+    assert not get_user_model().objects.filter(username="NCST_system").exists()

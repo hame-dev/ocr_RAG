@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -37,7 +37,16 @@ export default function DocumentPage() {
   const router = useRouter();
   const queryClient = useQueryClient();
   const { id } = useParams<{ id: string }>();
-  const [step, setStep] = useState<Step | null>(null);
+  const [step, setStepState] = useState<Step | null>(null);
+  // Set by ReviewStep. Switching steps unmounts it, which loses unsaved edits.
+  const reviewDirty = useRef(false);
+  const setStep = (next: Step) => {
+    if (step === "review" && next !== "review" && reviewDirty.current) {
+      if (!window.confirm(t("leaveUnsaved"))) return;
+      reviewDirty.current = false;
+    }
+    setStepState(next);
+  };
 
   const docQuery = useQuery({
     queryKey: ["document", id],
@@ -155,7 +164,7 @@ export default function DocumentPage() {
   return (
     <Page className="max-w-7xl">
       {/* Header */}
-      <nav className="mb-2 flex items-center gap-1 text-sm text-muted-foreground" aria-label="Breadcrumb">
+      <nav className="mb-2 flex items-center gap-1 text-sm text-muted-foreground" aria-label={t("breadcrumb")}>
         <Link href="/" className="hover:text-foreground">{t("library")}</Link>
         <ChevronRight className="size-3.5 rtl:-scale-x-100" />
         <span className="truncate text-foreground" dir="auto">{doc.display_title}</span>
@@ -233,7 +242,12 @@ export default function DocumentPage() {
           />
         )}
         {step === "review" && (
-          <ReviewStep doc={doc} onGoToExtract={() => setStep("extract")} onFinalized={() => setStep("details")} />
+          <ReviewStep
+            doc={doc}
+            onGoToExtract={() => setStep("extract")}
+            onFinalized={() => setStep("details")}
+            onDirtyChange={(dirty) => { reviewDirty.current = dirty; }}
+          />
         )}
         {step === "details" && (
           <DetailsStep status={status} metadata={metadataQuery.data} plan={planQuery.data} onRetry={retry} />

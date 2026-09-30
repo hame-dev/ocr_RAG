@@ -12,9 +12,11 @@ from __future__ import annotations
 import logging
 import time
 import traceback
+from datetime import timedelta
 
 from celery import chain, chord, group, shared_task
 from celery.exceptions import SoftTimeLimitExceeded
+from django.conf import settings
 from django.utils import timezone
 
 from common import fsm
@@ -33,6 +35,9 @@ from ocr.models import EngineHealthSnapshot, OCRBatch, OCRPageResult, OCRRun
 logger = logging.getLogger(__name__)
 
 
+HEALTH_HISTORY_DAYS = 7
+
+
 @shared_task(name="ocr.tasks.probe_engine_health")
 def probe_engine_health():
     """Beat task: keep the engine catalog warm so the UI never waits on a probe."""
@@ -45,12 +50,21 @@ def probe_engine_health():
             detail=(entry.get("detail") or "")[:512],
             latency_ms=entry.get("latency_ms"),
         )
+    # One row per engine per minute adds up; only recent history is useful.
+    EngineHealthSnapshot.objects.filter(
+        checked_at__lt=timezone.now() - timedelta(days=HEALTH_HISTORY_DAYS)
+    ).delete()
     return {"engines": len(entries), "available": sum(e["available"] for e in entries)}
 
 
 @shared_task(name="documents.tasks.preprocess_document")
-def preprocess_document(document_id: str, profiles: list[str] | None = None):
-    """Analyze the document and render every raster profile the batch needs."""
+def preprocess_document(document_id: str, profiles: list[str] | None = None,
+                        batch_id: str | None = None):
+    """Analyze the document and render every raster profile the batch needs.
+
+    `batch_id` is set when this runs as the first step of an OCR batch. If it
+    fails there, the chord after it never starts, so the batch is closed here.
+    """
     document = Document.objects.get(id=document_id)
 
     if document.status in (fsm.UPLOADED, fsm.FAILED):
@@ -65,7 +79,15 @@ def preprocess_document(document_id: str, profiles: list[str] | None = None):
         document.error_code = "preprocess_failed"
         document.error_message = str(exc)
         document.save(update_fields=["error_code", "error_message", "updated_at"])
-        fsm.transition_to(document, fsm.FAILED, detail=str(exc)[:500])
+        if batch_id:
+            _close_batch(batch_id, "preprocess_failed", f"preprocessing failed: {exc}")
+        # Inside an OCR batch the document is in ocr_running, where `failed`
+        # is not a legal move; ocr_failed is, and keeps the text step open.
+        target = fsm.OCR_FAILED if fsm.can_transition(document.status, fsm.OCR_FAILED) else fsm.FAILED
+        try:
+            fsm.transition_to(document, target, detail=str(exc)[:500])
+        except fsm.InvalidTransition:
+            logger.warning("could not mark %s failed from %s", document_id, document.status)
         raise
 
     if document.status == fsm.PREPROCESSING:
@@ -112,6 +134,9 @@ def _build_job(document: Document, engine, batch: OCRBatch) -> OCRJobInput:
     acks_late=True,
     reject_on_worker_lost=True,
     max_retries=2,
+    # Soft only: SoftTimeLimitExceeded is caught below and becomes a timed-out
+    # run. A hard limit would kill the process and, with acks_late, requeue it.
+    soft_time_limit=settings.OCR_TASK_SOFT_TIME_LIMIT_S,
 )
 def run_ocr_engine(self, batch_id: str, engine_name: str):
     """Run one engine. Catches everything — see the module docstring."""
@@ -124,6 +149,9 @@ def run_ocr_engine(self, batch_id: str, engine_name: str):
         engine_name=engine_name,
         defaults={"document": document, "status": "queued"},
     )
+    if run.status == "cancelled":
+        # Cancelled while it waited in the queue: do not start the engine.
+        return {"engine": engine_name, "status": "cancelled"}
 
     try:
         engine = registry.get(engine_name)
@@ -202,6 +230,8 @@ def run_ocr_engine(self, batch_id: str, engine_name: str):
         )
 
     # ---- success ------------------------------------------------------------
+    if _was_cancelled(run):
+        return {"engine": engine_name, "status": "cancelled"}
     text = result.text
     run.status = "succeeded"
     run.engine_version = result.engine_version or ""
@@ -265,7 +295,14 @@ def _flag_suspected_summarization(run: OCRRun, batch: OCRBatch) -> None:
         run.gibberish_score = min(1.0, (run.gibberish_score or 0.0) + 0.4)
 
 
+def _was_cancelled(run: OCRRun) -> bool:
+    """The user cancelled the batch while this engine ran; keep it cancelled."""
+    return OCRRun.objects.filter(id=run.id, status="cancelled").exists()
+
+
 def _fail(run: OCRRun, document, code: str, message: str, status: str = "failed"):
+    if _was_cancelled(run):
+        return {"engine": run.engine_name, "status": "cancelled"}
     run.status = status
     run.error_code = code[:64]
     run.error_message = message[:4000]
@@ -343,6 +380,40 @@ def finalize_ocr_batch(results, batch_id: str):
     return {"batch_id": batch_id, "status": status, "runs": len(results or [])}
 
 
+def _close_batch(batch_id: str, code: str, message: str, status: str = "failed") -> None:
+    """End a batch whose chord will never report back.
+
+    Every run still queued or running is marked `status`, then the batch is
+    finalized exactly as the chord callback would have done.
+    """
+    OCRRun.objects.filter(batch_id=batch_id, status__in=["queued", "running"]).update(
+        status=status, error_code=code[:64], error_message=message[:4000],
+        finished_at=timezone.now(),
+    )
+    finalize_ocr_batch(None, batch_id)
+
+
+@shared_task(name="ocr.tasks.reap_stale_ocr_batches")
+def reap_stale_ocr_batches() -> int:
+    """Beat task: close batches that stopped making progress.
+
+    The safety net for everything the chord cannot see: a worker killed by the
+    OOM killer, a lost broker message, a hung engine that ignores its timeout.
+    """
+    cutoff = timezone.now() - timedelta(seconds=settings.OCR_BATCH_STALE_S)
+    stale = OCRBatch.objects.filter(
+        status__in=["queued", "running", "partial"], started_at__lt=cutoff
+    ).values_list("id", flat=True)
+    count = 0
+    for batch_id in stale:
+        logger.warning("closing stale OCR batch %s", batch_id)
+        _close_batch(
+            str(batch_id), "stale", "the engine stopped reporting progress", status="timeout"
+        )
+        count += 1
+    return count
+
+
 def start_ocr_batch(document: Document, engines: list[str], languages: list[str],
                     options: dict | None = None) -> OCRBatch:
     """Kick off a multi-engine run: preprocess once, then fan out."""
@@ -371,7 +442,7 @@ def start_ocr_batch(document: Document, engines: list[str], languages: list[str]
         fsm.transition_to(document, fsm.OCR_RUNNING, payload={"batch_id": str(batch.id)})
 
     workflow = chain(
-        preprocess_document.si(str(document.id), profiles),
+        preprocess_document.si(str(document.id), profiles, str(batch.id)),
         chord(group(_engine_signatures(str(batch.id), engines)),
               finalize_ocr_batch.s(str(batch.id))),
     )

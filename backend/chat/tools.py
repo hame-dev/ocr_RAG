@@ -41,7 +41,7 @@ async def search_documents(
         Passages with chunk_id, document_id, document_title, page numbers and text.
         Cite a passage with [[cite:<chunk_id>]].
     """
-    if allowed_doc_ids == []:
+    if not allowed_doc_ids:  # None is deny too: see _document_is_allowed
         return []
     profile = research_profile(research_mode)
     search = sync_to_async(hybrid_search, thread_sensitive=True)
@@ -122,9 +122,13 @@ async def list_documents(
     def _load():
         from documents.models import Document
 
-        qs = Document.objects.select_related("metadata").filter(status="ready")
-        if allowed_doc_ids is not None:
-            qs = qs.filter(id__in=allowed_doc_ids)
+        from common.ownership import CHAT_READY_STATUSES
+
+        # Same readiness rule as the chat scope, so every document the agent
+        # can search is also one it can list.
+        qs = Document.objects.select_related("metadata").filter(
+            status__in=CHAT_READY_STATUSES, id__in=allowed_doc_ids or []
+        )
         if doc_type:
             qs = qs.filter(metadata__doc_type=doc_type)
         if lang:
@@ -213,8 +217,13 @@ async def get_chunk_context(
 def _document_is_allowed(
     document_id: str, allowed_doc_ids: list[str] | None
 ) -> bool:
-    """None means library-wide; a list is an authoritative allow-list."""
-    return allowed_doc_ids is None or str(document_id) in {
+    """A list is an authoritative allow-list; None allows nothing.
+
+    `None` used to mean "library-wide", which spans every user. chat_stream
+    always passes the caller's own ids, so failing closed costs nothing and
+    means a future call site that forgets them cannot leak another user's data.
+    """
+    return allowed_doc_ids is not None and str(document_id) in {
         str(allowed_id) for allowed_id in allowed_doc_ids
     }
 

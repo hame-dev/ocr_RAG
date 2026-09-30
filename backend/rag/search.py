@@ -12,8 +12,7 @@ from __future__ import annotations
 
 import logging
 
-from django.conf import settings
-from django.db import connection
+from django.db import connection, transaction
 
 from common.ollama import get_client
 
@@ -65,6 +64,30 @@ JOIN rag_chunk c ON c.id = fu.id
 JOIN documents_document d ON d.id = c.document_id
 ORDER BY fu.rrf DESC
 LIMIT %(top_k)s;
+"""
+
+# HYBRID_SQL's full-text half on its own, for when no query vector exists.
+LEXICAL_SQL = """
+WITH params AS (
+  SELECT websearch_to_tsquery('simple', ar_normalize_v1(%(qtext)s)) AS qq
+),
+fts AS (
+  SELECT c.id, ROW_NUMBER() OVER (ORDER BY ts_rank_cd(c.tsv, p.qq) DESC) AS rnk
+  FROM rag_chunk c, params p
+  WHERE c.tsv @@ p.qq
+    AND (%(doc_ids)s::uuid[] IS NULL OR c.document_id = ANY(%(doc_ids)s::uuid[]))
+    AND (%(doc_type)s::text IS NULL OR c.meta->>'doc_type' = %(doc_type)s)
+    AND (%(lang)s::text IS NULL OR c.lang = %(lang)s)
+  ORDER BY ts_rank_cd(c.tsv, p.qq) DESC
+  LIMIT %(top_k)s
+)
+SELECT c.id, c.document_id, d.title, d.original_filename,
+       c.page_start, c.page_end, c.text, c.section_path, c.lang, c.meta,
+       %(wl)s / (%(k)s + f.rnk) AS rrf, NULL::bigint AS rank_vec, f.rnk AS rank_fts
+FROM fts f
+JOIN rag_chunk c ON c.id = f.id
+JOIN documents_document d ON d.id = c.document_id
+ORDER BY f.rnk;
 """
 
 TRIGRAM_FALLBACK_SQL = """
@@ -121,15 +144,15 @@ def hybrid_search(
         "wl": LEXICAL_WEIGHT,
     }
 
-    with connection.cursor() as cursor:
+    # SET LOCAL lasts until the end of the transaction; under autocommit it
+    # would end with the SET itself and have no effect.
+    with transaction.atomic(), connection.cursor() as cursor:
         # Raising ef_search improves recall at negligible cost on this corpus.
         cursor.execute("SET LOCAL hnsw.ef_search = 100")
 
-        if vector is None:
-            rows = []
-        else:
-            cursor.execute(HYBRID_SQL, params)
-            rows = cursor.fetchall()
+        # Without a query vector (Ollama down), the lexical half still runs.
+        cursor.execute(HYBRID_SQL if vector is not None else LEXICAL_SQL, params)
+        rows = cursor.fetchall()
 
         if not rows:
             # Nothing matched semantically or lexically — try fuzzy. This is

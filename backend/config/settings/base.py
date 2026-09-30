@@ -95,13 +95,24 @@ STATIC_URL = "/static/"
 MEDIA_ROOT = os.environ.get("MEDIA_ROOT", "/data/media")
 # Document uploads. Matches the frontend's MAX_MB; chat attachments have their own cap.
 MAX_UPLOAD_BYTES = int(os.environ.get("MAX_UPLOAD_MB", "50")) * 1024 * 1024
+# Every page is rasterized, so the byte limit alone does not bound the work.
+MAX_UPLOAD_PAGES = int(os.environ.get("MAX_UPLOAD_PAGES", "300"))
+# Per page, at the highest render DPI: about A2 at 300 dpi.
+MAX_PAGE_PIXELS = int(os.environ.get("MAX_PAGE_PIXELS", str(50_000_000)))
 
 # ---- DRF --------------------------------------------------------------------
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": ["accounts.authentication.SessionAuthentication401"],
     "DEFAULT_PERMISSION_CLASSES": ["rest_framework.permissions.IsAuthenticated"],
     # Only the login endpoint opts into throttling; it is the brute-force target.
-    "DEFAULT_THROTTLE_RATES": {"login": os.environ.get("LOGIN_THROTTLE_RATE", "5/min")},
+    "DEFAULT_THROTTLE_RATES": {
+        "login": os.environ.get("LOGIN_THROTTLE_RATE", "5/min"),
+        "login_account": os.environ.get("LOGIN_ACCOUNT_THROTTLE_RATE", "30/hour"),
+    },
+    # How many reverse proxies in front of Django append to X-Forwarded-For.
+    # 0 (the default, and the compose setup) ignores the header entirely, so a
+    # client cannot pick its own throttle identity by sending one.
+    "NUM_PROXIES": int(os.environ.get("NUM_PROXIES", "0")),
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
     "DEFAULT_FILTER_BACKENDS": ["django_filters.rest_framework.DjangoFilterBackend"],
     "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.LimitOffsetPagination",
@@ -183,6 +194,11 @@ CODE_RUN_TIMEOUT_S = int(os.environ.get("CODE_RUN_TIMEOUT_S", "30"))
 EASYOCR_URL = os.environ.get("EASYOCR_URL", "http://ocr-easyocr:8081")
 PADDLE_URL = os.environ.get("PADDLE_URL", "http://ocr-paddle:8082")
 OCR_DEFAULT_TIMEOUT_S = int(os.environ.get("OCR_DEFAULT_TIMEOUT_S", "300"))
+# Per engine run. Above CHANDRA_TIMEOUT_S, the longest per-run engine budget.
+OCR_TASK_SOFT_TIME_LIMIT_S = int(os.environ.get("OCR_TASK_SOFT_TIME_LIMIT_S", "3600"))
+# A batch with no result after this long is closed by reap_stale_ocr_batches.
+# Generous: the llm queue runs one task at a time, so a batch can wait a while.
+OCR_BATCH_STALE_S = int(os.environ.get("OCR_BATCH_STALE_S", str(6 * 3600)))
 ENGINE_HEALTH_TTL_S = 60
 
 # ---- Chandra OCR 2 ----------------------------------------------------------

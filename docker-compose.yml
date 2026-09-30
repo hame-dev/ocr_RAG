@@ -20,6 +20,13 @@ x-django-env: &django-env
   SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-0}
   CSRF_COOKIE_SECURE: ${CSRF_COOKIE_SECURE:-0}
   LOGIN_THROTTLE_RATE: ${LOGIN_THROTTLE_RATE:-5/min}
+  LOGIN_ACCOUNT_THROTTLE_RATE: ${LOGIN_ACCOUNT_THROTTLE_RATE:-30/hour}
+  NUM_PROXIES: ${NUM_PROXIES:-0}
+  MAX_UPLOAD_MB: ${MAX_UPLOAD_MB:-50}
+  MAX_UPLOAD_PAGES: ${MAX_UPLOAD_PAGES:-300}
+  MAX_PAGE_PIXELS: ${MAX_PAGE_PIXELS:-50000000}
+  OCR_TASK_SOFT_TIME_LIMIT_S: ${OCR_TASK_SOFT_TIME_LIMIT_S:-3600}
+  OCR_BATCH_STALE_S: ${OCR_BATCH_STALE_S:-21600}
   DEFAULT_USERNAME: ${DEFAULT_USERNAME:-NCST_system}
   DEFAULT_PASSWORD: ${DEFAULT_PASSWORD:-NCST@12345}
   DATABASE_URL: postgresql://${POSTGRES_USER:-ocrrag}:${POSTGRES_PASSWORD:-ocrrag}@db:5432/${POSTGRES_DB:-ocrrag}
@@ -130,26 +137,63 @@ services:
       start_period: 30s
     mem_limit: 3g
 
+  # Two services rather than two workers in one container: with `&` + `wait`,
+  # one worker could die while the container still showed as up.
   worker:
     <<: [*backend-build, *backend-volumes, *hosts]
-    environment: {<<: [*django-env, *ollama-env]}
-    # llm queue is concurrency 1 on purpose: it serializes access to the single
-    # host Ollama so VLM OCR, correction, enrichment and embedding never fight.
+    environment: {<<: [*django-env, *ollama-env], WORKER_NAME: default}
     command:
-      - sh
+      - celery
+      - -A
+      - config
+      - worker
+      - -l
+      - info
+      - -Q
+      - default,celery,ocr_cpu,index
       - -c
-      - >-
-        celery -A config worker -l info
-        -Q default,celery,ocr_cpu,index -c ${OCR_PARALLELISM:-2}
-        --max-tasks-per-child 20 &
-        celery -A config worker -l info -Q llm -c 1
-        --max-tasks-per-child 10 -n llm@%h &
-        wait
-    depends_on:
+      - "${OCR_PARALLELISM:-2}"
+      - --max-tasks-per-child
+      - "20"
+      - -n
+      - default@%h
+    depends_on: &worker-depends
       db: {condition: service_healthy}
       redis: {condition: service_healthy}
       migrate: {condition: service_completed_successfully}
-    mem_limit: 6g
+    healthcheck: &worker-health
+      test: ["CMD-SHELL", "celery -A config inspect ping -d $$WORKER_NAME@$$HOSTNAME --timeout 10"]
+      interval: 60s
+      timeout: 20s
+      retries: 3
+      start_period: 60s
+    restart: unless-stopped
+    mem_limit: 4g
+
+  # llm queue is concurrency 1 on purpose: it serializes access to the single
+  # host Ollama so VLM OCR, correction, enrichment and embedding never fight.
+  worker-llm:
+    <<: [*backend-build, *backend-volumes, *hosts]
+    environment: {<<: [*django-env, *ollama-env], WORKER_NAME: llm}
+    command:
+      - celery
+      - -A
+      - config
+      - worker
+      - -l
+      - info
+      - -Q
+      - llm
+      - -c
+      - "1"
+      - --max-tasks-per-child
+      - "10"
+      - -n
+      - llm@%h
+    depends_on: *worker-depends
+    healthcheck: *worker-health
+    restart: unless-stopped
+    mem_limit: 3g
 
   beat:
     <<: [*backend-build, *backend-volumes, *hosts]
@@ -164,6 +208,9 @@ services:
     build:
       context: ./frontend
       dockerfile: ../docker/frontend/Dockerfile
+      # `dev` runs `next dev` against the bind-mounted source. Build the `prod`
+      # target (next build + next start) for anything shared.
+      target: dev
     environment:
       NEXT_PUBLIC_API_BASE: ${NEXT_PUBLIC_API_BASE:-http://localhost:8000}
       # Cap V8's heap below the container limit: otherwise the dev compiler's

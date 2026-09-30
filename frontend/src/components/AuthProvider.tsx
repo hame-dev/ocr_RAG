@@ -3,6 +3,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { createContext, useCallback, useContext, useEffect, useMemo } from "react";
 import {
+  ApiError,
   UNAUTHORIZED_EVENT,
   User,
   getMe,
@@ -14,7 +15,9 @@ const ME_KEY = ["me"] as const;
 
 interface AuthCtx {
   user: User | null;
-  status: "loading" | "authenticated" | "anonymous";
+  /** "unreachable": the session check failed (API down), which is not the same as signed out. */
+  status: "loading" | "authenticated" | "anonymous" | "unreachable";
+  retry: () => void;
   login: (username: string, password: string) => Promise<User>;
   logout: () => Promise<void>;
 }
@@ -22,6 +25,7 @@ interface AuthCtx {
 const Ctx = createContext<AuthCtx>({
   user: null,
   status: "loading",
+  retry: () => {},
   login: async () => {
     throw new Error("AuthProvider missing");
   },
@@ -65,7 +69,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const user = me.data ?? null;
     return {
       user,
-      status: me.isPending ? "loading" : user ? "authenticated" : "anonymous",
+      status: me.isPending
+        ? "loading"
+        : user
+          ? "authenticated"
+          : me.isError
+            ? "unreachable"
+            : "anonymous",
+      retry: () => void me.refetch(),
       login: async (username, password) => {
         const signedIn = await apiLogin(username, password);
         resetSession(signedIn);
@@ -74,12 +85,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       logout: async () => {
         try {
           await apiLogout();
-        } finally {
-          resetSession(null);
+        } catch (error) {
+          // Signed out already (401) is fine. Anything else means the server
+          // still holds the session, and clearing only the UI would make a
+          // reload sign the user straight back in.
+          if (!(error instanceof ApiError && error.status === 401)) throw error;
         }
+        resetSession(null);
       },
     };
-  }, [me.data, me.isPending, resetSession]);
+  }, [me.data, me.isPending, me.isError, me.refetch, resetSession]);
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }

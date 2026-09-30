@@ -7,33 +7,49 @@ import {
  *
  * Native EventSource handles reconnection and Last-Event-ID for us, which
  * matters because a multi-engine OCR batch runs for minutes and the user will
- * switch tabs.
+ * switch tabs. But it gives up for good on any non-200 answer (a 502 while the
+ * backend restarts, a 401 once the session expires), so a closed source is
+ * reopened here with backoff. Each new connection starts with a `snapshot`.
  */
 export function subscribeToDocument(
   documentId: string,
   handlers: Record<string, (data: any) => void>,
 ): () => void {
-  // withCredentials sends the session cookie; EventSource cannot set headers.
-  const source = new EventSource(`${API_BASE}/api/documents/${documentId}/events/`, {
-    withCredentials: true,
-  });
+  let source: EventSource | null = null;
+  let retryTimer: ReturnType<typeof setTimeout> | undefined;
+  let attempt = 0;
+  let closed = false;
 
-  const registered: Array<[string, EventListener]> = [];
-  for (const [event, handler] of Object.entries(handlers)) {
-    const listener: EventListener = (e) => {
-      try {
-        handler(JSON.parse((e as MessageEvent).data));
-      } catch {
-        /* heartbeat or malformed frame */
-      }
-    };
-    source.addEventListener(event, listener);
-    registered.push([event, listener]);
-  }
+  const open = () => {
+    // withCredentials sends the session cookie; EventSource cannot set headers.
+    const current = new EventSource(`${API_BASE}/api/documents/${documentId}/events/`, {
+      withCredentials: true,
+    });
+    source = current;
+    for (const [event, handler] of Object.entries(handlers)) {
+      current.addEventListener(event, (e) => {
+        if (event === "snapshot") attempt = 0; // connected: reset the backoff
+        try {
+          handler(JSON.parse((e as MessageEvent).data));
+        } catch {
+          /* heartbeat, malformed frame, or a connection error without data */
+        }
+      });
+    }
+    current.addEventListener("error", () => {
+      // CONNECTING means the browser is already retrying on its own.
+      if (closed || current.readyState !== EventSource.CLOSED) return;
+      const delay = Math.min(30_000, 1000 * 2 ** attempt);
+      attempt += 1;
+      retryTimer = setTimeout(open, delay);
+    });
+  };
+  open();
 
   return () => {
-    for (const [event, listener] of registered) source.removeEventListener(event, listener);
-    source.close();
+    closed = true;
+    clearTimeout(retryTimer);
+    source?.close();
   };
 }
 
@@ -130,6 +146,36 @@ export async function streamChat(
   const decoder = new TextDecoder();
   let buffer = "";
 
+  const dispatch = (frame: string) => {
+    let event = "message";
+    const dataLines: string[] = [];
+    for (const line of frame.split("\n")) {
+      if (line.startsWith("event: ")) event = line.slice(7).trim();
+      else if (line.startsWith("data: ")) dataLines.push(line.slice(6));
+      // lines starting with ':' are heartbeat comments
+    }
+    if (!dataLines.length) return;
+
+    let payload: any;
+    try {
+      payload = JSON.parse(dataLines.join("\n"));
+    } catch {
+      return;
+    }
+
+    switch (event) {
+      case "token": handlers.onToken?.(payload.t); break;
+      case "reset": handlers.onReset?.(); break;
+      case "thinking": handlers.onThinking?.(payload.t); break;
+      case "phase": handlers.onPhase?.(payload); break;
+      case "tool_start": handlers.onToolStart?.(payload.name, payload.args, payload.phase); break;
+      case "tool_end": handlers.onToolEnd?.(payload.name, payload.hits); break;
+      case "code_run": handlers.onCodeRun?.(payload); break;
+      case "done": handlers.onDone?.(payload); break;
+      case "error": handlers.onError?.(payload.detail); break;
+    }
+  };
+
   while (true) {
     const { done, value } = await reader.read();
     if (done) break;
@@ -138,35 +184,9 @@ export async function streamChat(
     // Frames are separated by a blank line.
     const frames = buffer.split("\n\n");
     buffer = frames.pop() ?? "";
-
-    for (const frame of frames) {
-      let event = "message";
-      const dataLines: string[] = [];
-      for (const line of frame.split("\n")) {
-        if (line.startsWith("event: ")) event = line.slice(7).trim();
-        else if (line.startsWith("data: ")) dataLines.push(line.slice(6));
-        // lines starting with ':' are heartbeat comments
-      }
-      if (!dataLines.length) continue;
-
-      let payload: any;
-      try {
-        payload = JSON.parse(dataLines.join("\n"));
-      } catch {
-        continue;
-      }
-
-      switch (event) {
-        case "token": handlers.onToken?.(payload.t); break;
-        case "reset": handlers.onReset?.(); break;
-        case "thinking": handlers.onThinking?.(payload.t); break;
-        case "phase": handlers.onPhase?.(payload); break;
-        case "tool_start": handlers.onToolStart?.(payload.name, payload.args, payload.phase); break;
-        case "tool_end": handlers.onToolEnd?.(payload.name, payload.hits); break;
-        case "code_run": handlers.onCodeRun?.(payload); break;
-        case "done": handlers.onDone?.(payload); break;
-        case "error": handlers.onError?.(payload.detail); break;
-      }
-    }
+    for (const frame of frames) dispatch(frame);
   }
+  // A last frame the server closed without its trailing blank line.
+  buffer += decoder.decode();
+  if (buffer.trim()) dispatch(buffer);
 }

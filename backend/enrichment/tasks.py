@@ -12,6 +12,14 @@ from enrichment.models import ExtractionPlan, MetadataRecord
 
 logger = logging.getLogger(__name__)
 
+# The fields MetadataPatchSerializer lets a person edit (plus the date derived
+# from `dates`, and the model's raw view of them in `core`).
+HUMAN_EDITABLE_FIELDS = {
+    "doc_type", "title", "title_translit", "primary_language", "languages",
+    "summary_short", "summary_long", "keywords", "topics", "entities", "dates",
+    "identifiers", "custom_fields", "document_date", "core",
+}
+
 
 @shared_task(name="enrichment.tasks.plan_extraction")
 def plan_extraction(document_id: str):
@@ -102,33 +110,37 @@ def enrich_document(document_id: str, auto_index: bool = True):
         if field.get("user_required") and not result["custom_fields"].get(field["key"]):
             quality_flags.append(f"missing_required:{field['key']}")
 
-    record, _ = MetadataRecord.objects.update_or_create(
-        document=document,
-        defaults={
-            "doc_type": metadata.doc_type.value,
-            "title": metadata.title[:1024],
-            "title_translit": (metadata.title_translit or "")[:1024],
-            "primary_language": metadata.primary_language,
-            "languages": metadata.languages,
-            "summary_short": metadata.summary_short,
-            "summary_long": metadata.summary_long,
-            "keywords": metadata.keywords,
-            "topics": metadata.topics,
-            "document_date": extractor.parse_date(metadata.dates.document_date),
-            "entities": metadata.entities.model_dump(),
-            "dates": metadata.dates.model_dump(),
-            "identifiers": metadata.identifiers.model_dump(),
-            "provenance": provenance,
-            "quality_flags": sorted(set(quality_flags)),
-            "custom_fields": result["custom_fields"],
-            "core": metadata.model_dump(mode="json"),
-            "model_id": settings.LLM_MODEL,
-            "prompt_version": extractor.PROMPT_VERSION,
-            "validation_attempts": result["attempts"],
-            "is_partial": result["is_partial"],
-            "raw_llm_output": (result["raw"] or "")[:20000],
-        },
-    )
+    defaults = {
+        "doc_type": metadata.doc_type.value,
+        "title": metadata.title[:1024],
+        "title_translit": (metadata.title_translit or "")[:1024],
+        "primary_language": metadata.primary_language,
+        "languages": metadata.languages,
+        "summary_short": metadata.summary_short,
+        "summary_long": metadata.summary_long,
+        "keywords": metadata.keywords,
+        "topics": metadata.topics,
+        "document_date": extractor.parse_date(metadata.dates.document_date),
+        "entities": metadata.entities.model_dump(),
+        "dates": metadata.dates.model_dump(),
+        "identifiers": metadata.identifiers.model_dump(),
+        "provenance": provenance,
+        "quality_flags": sorted(set(quality_flags)),
+        "custom_fields": result["custom_fields"],
+        "core": metadata.model_dump(mode="json"),
+        "model_id": settings.LLM_MODEL,
+        "prompt_version": extractor.PROMPT_VERSION,
+        "validation_attempts": result["attempts"],
+        "is_partial": result["is_partial"],
+        "raw_llm_output": (result["raw"] or "")[:20000],
+    }
+    existing = MetadataRecord.objects.filter(document=document, human_edited=True).first()
+    if existing is not None:
+        # A person corrected this record by hand (enrichment/views.py sets the
+        # flag). Re-running the model refreshes provenance and quality signals
+        # but never overwrites what they wrote.
+        defaults = {k: v for k, v in defaults.items() if k not in HUMAN_EDITABLE_FIELDS}
+    record, _ = MetadataRecord.objects.update_or_create(document=document, defaults=defaults)
 
     # If the document had no title, adopt the extracted one for the library grid.
     if not document.title and record.title:

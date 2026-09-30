@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from django.db import transaction
+from django.db.models import Count
 from rest_framework import serializers, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -59,7 +59,8 @@ class ConversationSerializer(serializers.ModelSerializer):
         ]
 
     def get_message_count(self, obj) -> int:
-        return obj.messages.count()
+        annotated = getattr(obj, "message_total", None)
+        return annotated if annotated is not None else obj.messages.count()
 
     def get_selected_documents(self, obj) -> list[dict]:
         if not obj.document_ids:
@@ -123,22 +124,22 @@ class ConversationDetailSerializer(ConversationSerializer):
 
 
 class ConversationViewSet(viewsets.ModelViewSet):
-    queryset = Conversation.objects.prefetch_related("messages__attachments", "messages__files").all()
+    queryset = Conversation.objects.all()
 
     def get_queryset(self):
-        return super().get_queryset().filter(owner=self.request.user)
+        qs = super().get_queryset().filter(owner=self.request.user)
+        if self.action == "list":
+            # The list shows counts only; loading every message of every
+            # conversation here is what made the sidebar slow.
+            return qs.annotate(message_total=Count("messages"))
+        return qs.prefetch_related("messages__attachments", "messages__files")
 
     def perform_create(self, serializer):
         serializer.save(owner=self.request.user)
 
-    def perform_destroy(self, instance):
-        from chat.checkpointer import delete_thread
-
-        # Messages, attachments and generated files cascade (their files on
-        # disk go via chat/signals.py); the agent's memory is erased here.
-        with transaction.atomic():
-            delete_thread(instance.thread_id)
-            instance.delete()
+    # Deleting cascades to messages, attachments and generated files; the
+    # agent's memory and the files on disk go via chat/signals.py, so every
+    # delete path (API, user deletion, shell) cleans up the same way.
 
     def get_serializer_class(self):
         return (

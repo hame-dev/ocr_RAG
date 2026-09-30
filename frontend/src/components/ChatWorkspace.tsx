@@ -116,6 +116,9 @@ export function ChatWorkspace({ conversationId }: { conversationId?: string }) {
 
   function reset() {
     abortRef.current?.abort();
+    // Detach the stream: its abort handler must not write into the cleared
+    // transcript (it used to update a message that no longer existed).
+    abortRef.current = null;
     hydratedIdRef.current = null;
     setMessages([]);
     setSelectedSources([]);
@@ -146,10 +149,13 @@ export function ChatWorkspace({ conversationId }: { conversationId?: string }) {
   }, [pathname, conversationId]);
 
   // Load history once per conversation. Never re-hydrate: a refetch (e.g. for
-  // the title) must not overwrite a transcript that is streaming.
+  // the title) must not overwrite a transcript that is streaming. Wait for an
+  // in-flight refetch first: cached data can predate a turn that streamed
+  // after the user navigated away, and hydrating from it would hide that turn.
   useEffect(() => {
     const conversation = conversationQuery.data;
     if (!activeId || !conversation || hydratedIdRef.current === activeId) return;
+    if (conversationQuery.isFetching) return;
     hydratedIdRef.current = activeId;
     setMessages(
       conversation.messages
@@ -172,7 +178,7 @@ export function ChatWorkspace({ conversationId }: { conversationId?: string }) {
         })),
     );
     setSelectedSources(conversation.selected_documents ?? []);
-  }, [activeId, conversationQuery.data]);
+  }, [activeId, conversationQuery.data, conversationQuery.isFetching]);
 
   // Follow the stream. Instant and before paint: a smooth scroll restarted on
   // every token is what made streaming stutter.
@@ -272,8 +278,9 @@ export function ChatWorkspace({ conversationId }: { conversationId?: string }) {
     });
   }
 
-  function updateLast(update: (message: DisplayMessage) => DisplayMessage) {
+  function updateLastMessage(update: (message: DisplayMessage) => DisplayMessage) {
     setMessages((current) => {
+      if (!current.length) return current;
       const next = [...current];
       next[next.length - 1] = update(next[next.length - 1]);
       return next;
@@ -285,6 +292,12 @@ export function ChatWorkspace({ conversationId }: { conversationId?: string }) {
     lastTurnRef.current = { ...turn, attachmentIds: [] };
     const controller = new AbortController();
     abortRef.current = controller;
+    // Only the stream the view is attached to may write into the transcript;
+    // reset() detaches it when the user starts a new chat mid-answer.
+    const updateLast = (update: (message: DisplayMessage) => DisplayMessage) => {
+      if (abortRef.current === controller) updateLastMessage(update);
+    };
+    let settled = false;
     setStreaming(true);
     setToolPhase(null);
 
@@ -319,6 +332,7 @@ export function ChatWorkspace({ conversationId }: { conversationId?: string }) {
     };
 
     const fail = (detail: string) => {
+      settled = true;
       dropBuffer();
       setToolPhase(null);
       updateLast((last) => ({ ...last, pending: false, error: detail }));
@@ -351,6 +365,7 @@ export function ChatWorkspace({ conversationId }: { conversationId?: string }) {
           }));
         },
         onDone: (payload) => {
+          settled = true;
           dropBuffer();
           setToolPhase(null);
           updateLast((last) => ({
@@ -369,6 +384,13 @@ export function ChatWorkspace({ conversationId }: { conversationId?: string }) {
         },
         onError: fail,
       }, controller.signal);
+      // The connection closed without a done or error frame (proxy timeout,
+      // worker killed): keep what arrived and say the answer is incomplete,
+      // rather than leaving it pending forever.
+      if (!settled) {
+        flush();
+        fail(t("streamFailed"));
+      }
     } catch (error) {
       if (controller.signal.aborted) {
         flush();
@@ -383,6 +405,11 @@ export function ChatWorkspace({ conversationId }: { conversationId?: string }) {
       setStreaming(false);
       void queryClient.invalidateQueries({ queryKey: ["conversations"] });
       // Picks up the title the first turn assigned (hydration is one-shot).
+      if (controller.signal.aborted) {
+        // The server kept going (it saves the partial reply); drop the cached
+        // transcript so coming back to this chat loads the saved version.
+        queryClient.removeQueries({ queryKey: ["conversation", id], type: "inactive" });
+      }
       void queryClient.invalidateQueries({ queryKey: ["conversation", id] });
     }
   }
@@ -597,7 +624,7 @@ const AssistantMessage = memo(function AssistantMessage({
             {t(toolChip.label)}
           </div>
         ) : waiting ? (
-          <div className="flex items-center gap-1 py-2" aria-label="…">
+          <div className="flex items-center gap-1 py-2" role="status" aria-label={t("assistantAnswer")}>
             {[0, 150, 300].map((delay) => (
               <span key={delay} className="size-1.5 animate-typing-dot rounded-full bg-muted-foreground"
                     style={{ animationDelay: `${delay}ms` }} />

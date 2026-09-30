@@ -23,6 +23,16 @@ const CHAT_MODE_KEY = "ocr-rag-chat-mode";
 const THINKING_KEY = "ocr-rag-chat-thinking";
 const MAX_FILES = 5;
 const ACCEPT = "image/*,.pdf,.txt,.md,.csv,.tsv,.json,.docx";
+// Mirrors chat/attachments.py (MAX_BYTES and the accepted types), so a file
+// the server will refuse is refused before it is uploaded.
+const MAX_FILE_MB = 20;
+const ACCEPTED_EXTENSIONS = [".pdf", ".txt", ".md", ".markdown", ".csv", ".tsv", ".json", ".log", ".docx"];
+
+function acceptedType(file: File): boolean {
+  if (file.type.startsWith("image/")) return true;
+  const name = file.name.toLowerCase();
+  return ACCEPTED_EXTENSIONS.some((extension) => name.endsWith(extension));
+}
 
 const DEPTHS: { value: ResearchMode; label: StringKey; hint: StringKey }[] = [
   { value: "fast", label: "fast", hint: "fastHint" },
@@ -118,7 +128,11 @@ export function ChatComposer({
   // Release object URLs for thumbnails when the composer goes away.
   const filesRef = useRef(files);
   filesRef.current = files;
-  useEffect(() => () => filesRef.current.forEach((f) => f.localPreview && URL.revokeObjectURL(f.localPreview)), []);
+  // Also stop uploads still in flight: their results would land nowhere.
+  useEffect(() => () => filesRef.current.forEach((f) => {
+    f.abort.abort();
+    if (f.localPreview) URL.revokeObjectURL(f.localPreview);
+  }), []);
 
   function persist(key: string, value: string) {
     try { localStorage.setItem(key, value); } catch {}
@@ -141,6 +155,15 @@ export function ChatComposer({
     const room = MAX_FILES - files.length;
     if (incoming.length > room) setFileError(fmt(t("tooManyAttachments"), { n: MAX_FILES }));
     for (const file of incoming.slice(0, Math.max(room, 0))) {
+      // Drag and drop skips the input's `accept` filter, so check here.
+      if (!acceptedType(file)) {
+        setFileError(`${file.name}: ${t("fileTypeNotSupported")}`);
+        continue;
+      }
+      if (file.size > MAX_FILE_MB * 1024 * 1024) {
+        setFileError(`${file.name}: ${fmt(t("fileTooLarge"), { size: MAX_FILE_MB })}`);
+        continue;
+      }
       const key = `${file.name}-${file.size}-${Math.random().toString(36).slice(2)}`;
       const abort = new AbortController();
       const localPreview = file.type.startsWith("image/") ? URL.createObjectURL(file) : null;
@@ -167,7 +190,8 @@ export function ChatComposer({
   async function submit() {
     const content = input.trim();
     if (!content || streaming || uploading) return;
-    const ready = files.filter((f) => f.status === "ready" && f.attachment);
+    // Attachments are a General-mode feature; the Documents agent ignores them.
+    const ready = general ? files.filter((f) => f.status === "ready" && f.attachment) : [];
     setInput("");
     setFiles([]);
     setFileError(null);

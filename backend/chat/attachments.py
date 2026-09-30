@@ -39,6 +39,11 @@ TEXT_EXTENSIONS = {".txt", ".md", ".markdown", ".csv", ".tsv", ".json", ".log"}
 TEXT_BUDGET_CHARS = 16_000
 MAX_IMAGES_PER_CONVERSATION = 8
 MAX_ATTACHMENTS_PER_MESSAGE = 5
+# Stored text per attachment. Well above TEXT_BUDGET_CHARS (only that much ever
+# reaches the prompt), but bounded so a pathological file cannot fill the table.
+MAX_STORED_TEXT_CHARS = 500_000
+# A .docx is a zip: 20 MB compressed can inflate to gigabytes in python-docx.
+MAX_DOCX_UNCOMPRESSED_BYTES = 100 * 1024 * 1024
 
 
 class UnsupportedFile(ValueError):
@@ -112,6 +117,8 @@ def _process_docx(data: bytes) -> dict:
         with zipfile.ZipFile(io.BytesIO(data)) as archive:
             if "word/document.xml" not in archive.namelist():
                 raise UnsupportedFile("not a Word document")
+            if sum(info.file_size for info in archive.infolist()) > MAX_DOCX_UNCOMPRESSED_BYTES:
+                raise UnsupportedFile("this Word document is too large once uncompressed")
         import docx
 
         document = docx.Document(io.BytesIO(data))
@@ -133,15 +140,27 @@ def _process_docx(data: bytes) -> dict:
     }
 
 
-def _process_text(data: bytes) -> dict:
+def _decode_text(data: bytes) -> str:
+    # UTF-16 only with a BOM: without one, "utf-16" decodes almost any
+    # even-length byte string, so cp1256 (Arabic Windows) files came back as
+    # CJK-looking garbage instead of reaching the cp1256 fallback.
+    if data[:2] in (b"\xff\xfe", b"\xfe\xff"):
+        return data.decode("utf-16")
     if b"\x00" in data[:4096]:
         raise UnsupportedFile("binary file")
-    for encoding in ("utf-8-sig", "utf-16", "cp1256", "latin-1"):
+    for encoding in ("utf-8-sig", "cp1256"):
         try:
-            text = data.decode(encoding)
-            break
+            return data.decode(encoding)
         except UnicodeDecodeError:
             continue
+    return data.decode("latin-1")  # never fails
+
+
+def _process_text(data: bytes) -> dict:
+    try:
+        text = _decode_text(data)
+    except UnicodeDecodeError as exc:  # a UTF-16 BOM on invalid UTF-16
+        raise UnsupportedFile("not a readable text file") from exc
     return {"kind": "text", "mime": "text/plain", "extracted_text": text}
 
 
@@ -180,6 +199,7 @@ def process_upload(upload, owner) -> ChatAttachment:
 
     for key, value in fields.items():
         setattr(attachment, key, value)
+    attachment.extracted_text = (attachment.extracted_text or "")[:MAX_STORED_TEXT_CHARS]
     if not attachment.storage_path:
         attachment.storage_path = (attachment.page_images or [""])[0] or directory
     if attachment.kind != "image" and not attachment.extracted_text and not attachment.page_images:
@@ -286,6 +306,13 @@ def delete_stale_unbound(max_age: timedelta = timedelta(hours=24)) -> int:
 @api_view(["POST"])
 @parser_classes([MultiPartParser])
 def upload_attachment(request):
+    from common.uploads import body_too_large
+
+    if body_too_large(request, MAX_BYTES):
+        return Response(
+            {"detail": f"file is larger than {MAX_BYTES // (1024 * 1024)} MB"},
+            status=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+        )
     upload = request.FILES.get("file")
     if upload is None:
         return Response({"detail": "file is required"}, status=status.HTTP_400_BAD_REQUEST)

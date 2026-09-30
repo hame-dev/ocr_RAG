@@ -31,9 +31,14 @@ export function useDocumentStream(
   const handlers = useRef({ onStatus, onMetadata });
   handlers.current = { onStatus, onMetadata };
 
+  // Comparisons are refetched as each engine lands; only the newest request
+  // may win, or a slow early response overwrites a newer one.
+  const comparisonRequest = useRef(0);
   const loadComparison = useCallback(async (batchId: string) => {
+    const request = ++comparisonRequest.current;
     try {
-      setComparison(await getComparison(batchId));
+      const next = await getComparison(batchId);
+      if (request === comparisonRequest.current && batchRef.current === batchId) setComparison(next);
     } catch {
       /* not ready yet */
     }
@@ -44,22 +49,28 @@ export function useDocumentStream(
     return subscribeToDocument(id, {
       snapshot: (data) => {
         setLiveStatus(data.status);
+        // Also sent after a reconnect, when events may have been missed.
+        handlers.current.onStatus(data.status);
         const latest = data.batches?.[0];
         if (!latest) return;
         batchRef.current = latest.batch_id;
-        const next: Record<string, EngineProgress> = {};
-        for (const run of latest.runs ?? []) {
-          next[run.engine] = {
-            engine: run.engine,
-            status: run.status,
-            page: run.status === "succeeded" ? data.page_count ?? 1 : 0,
-            of: data.page_count ?? 1,
-            durationMs: run.duration_ms,
-            charCount: run.char_count,
-            error: run.error_message,
-          };
-        }
-        setProgress(next);
+        setProgress((previous) => {
+          const next: Record<string, EngineProgress> = {};
+          for (const run of latest.runs ?? []) {
+            next[run.engine] = {
+              engine: run.engine,
+              status: run.status,
+              // The snapshot has no page counter; keep the one already shown
+              // so a reconnect does not send the bar back to zero.
+              page: run.status === "succeeded" ? data.page_count ?? 1 : previous[run.engine]?.page ?? 0,
+              of: data.page_count ?? 1,
+              durationMs: run.duration_ms,
+              charCount: run.char_count,
+              error: run.error_message,
+            };
+          }
+          return next;
+        });
         if (latest.runs?.some((r: { status: string }) => r.status === "succeeded")) {
           void loadComparison(latest.batch_id);
         }
@@ -112,6 +123,7 @@ export function useDocumentStream(
   /** Called when the user starts a new batch, before the first event arrives. */
   const beginBatch = useCallback((batchId: string, engines: string[], pageCount: number) => {
     batchRef.current = batchId;
+    comparisonRequest.current += 1; // discard answers for the previous batch
     setComparison(null);
     setProgress(
       Object.fromEntries(

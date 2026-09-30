@@ -51,8 +51,11 @@ export const Markdown = memo(function Markdown({ children, onAccent }: Props) {
             return <code className={className} {...props}>{children}</code>;
           },
           pre: ({ node, children, ...props }) => {
+            // The child is the element built from `components.code` above, not
+            // the MermaidDiagram it returns, so match on the fence's language.
             const child = Children.count(children) === 1 ? Children.only(children) : null;
-            if (isValidElement(child) && child.type === MermaidDiagram) return <>{child}</>;
+            const className = isValidElement<{ className?: string }>(child) ? child.props.className : undefined;
+            if (className?.split(" ").includes("language-mermaid")) return <>{child}</>;
             return <pre {...props}>{children}</pre>;
           },
         }}

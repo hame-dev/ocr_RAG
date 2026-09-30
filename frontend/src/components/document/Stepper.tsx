@@ -48,7 +48,7 @@ export function Stepper({
   const reachable = (index: number) => STEPS.slice(0, index).every((s) => done[s.id]);
 
   return (
-    <nav aria-label="Progress" className="-mx-4 overflow-x-auto px-4 sm:mx-0 sm:px-0">
+    <nav aria-label={t("progressSteps")} className="-mx-4 overflow-x-auto px-4 sm:mx-0 sm:px-0">
       <ol className="flex min-w-max items-center gap-1 sm:gap-2">
         {STEPS.map((step, index) => {
           const active = step.id === current;

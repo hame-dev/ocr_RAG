@@ -7,7 +7,16 @@ from django.conf import settings
 from django.db.models.signals import post_delete
 from django.dispatch import receiver
 
-from chat.models import ChatAttachment, GeneratedFile
+from chat.models import ChatAttachment, Conversation, GeneratedFile
+
+
+@receiver(post_delete, sender=Conversation)
+def remove_agent_memory(sender, instance: Conversation, **kwargs):
+    # Runs in the deleting transaction, so memory and row go together. Also
+    # fires on cascade from a deleted user, which the API view never sees.
+    from chat.checkpointer import delete_thread
+
+    delete_thread(instance.thread_id)
 
 
 @receiver(post_delete, sender=ChatAttachment)

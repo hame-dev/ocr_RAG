@@ -59,6 +59,13 @@ class DocumentViewSet(viewsets.ModelViewSet):
         return qs.distinct()
 
     def create(self, request, *args, **kwargs):
+        from common.uploads import body_too_large
+
+        if body_too_large(request, settings.MAX_UPLOAD_BYTES):
+            return Response(
+                {"file": [f"file is larger than {settings.MAX_UPLOAD_BYTES // (1024 * 1024)} MB"]},
+                status=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            )
         serializer = UploadSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         upload = serializer.validated_data["file"]
@@ -179,8 +186,13 @@ class DocumentViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=["get"], url_path="revisions/diff")
     def revision_diff(self, request, pk=None):
         document = self.get_object()
-        a_no = int(request.query_params.get("a", 1))
-        b_no = int(request.query_params.get("b", 2))
+        try:
+            a_no = int(request.query_params.get("a", 1))
+            b_no = int(request.query_params.get("b", 2))
+        except ValueError:
+            return Response(
+                {"detail": "a and b must be revision numbers"}, status=status.HTTP_400_BAD_REQUEST
+            )
         a = document.revisions.filter(revision_no=a_no).first()
         b = document.revisions.filter(revision_no=b_no).first()
         if not a or not b:
@@ -247,17 +259,27 @@ class DocumentViewSet(viewsets.ModelViewSet):
                 {"detail": "no revision to finalize; select an OCR result or type text first"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        # Checked before anything is written: finalizing while OCR, enrichment
+        # or indexing is still running used to save is_final, then fail the
+        # transition with a 500.
+        if document.status != fsm.TEXT_FINALIZED and not fsm.can_transition(
+            document.status, fsm.TEXT_FINALIZED
+        ):
+            return Response(
+                {"detail": f"cannot finalize while the document is {document.status}; wait for it to finish"},
+                status=status.HTTP_409_CONFLICT,
+            )
 
-        document.revisions.update(is_final=False)
-        revision.is_final = True
-        revision.save(update_fields=["is_final"])
-        document.current_revision = revision
-        document.save(update_fields=["current_revision", "updated_at"])
-
-        fsm.transition_to(
-            document, fsm.TEXT_FINALIZED,
-            actor="user", payload={"revision_no": revision.revision_no},
-        )
+        with transaction.atomic():
+            document.revisions.update(is_final=False)
+            revision.is_final = True
+            revision.save(update_fields=["is_final"])
+            document.current_revision = revision
+            document.save(update_fields=["current_revision", "updated_at"])
+            fsm.transition_to(
+                document, fsm.TEXT_FINALIZED,
+                actor="user", payload={"revision_no": revision.revision_no},
+            )
         return Response(TextRevisionDetailSerializer(revision).data)
 
     @action(detail=True, methods=["post"])

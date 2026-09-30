@@ -438,7 +438,25 @@ export async function uploadAttachment(
   onProgress?: (fraction: number) => void,
   signal?: AbortSignal,
 ): Promise<ChatAttachment> {
-  const headers = await authHeaders("POST");
+  try {
+    return await sendAttachment(file, false, onProgress, signal);
+  } catch (error) {
+    // Stale CSRF token (rotated by a login elsewhere): refresh once and retry,
+    // as api() and streamChat do.
+    if (error instanceof ApiError && error.status === 403 && !signal?.aborted) {
+      return sendAttachment(file, true, onProgress, signal);
+    }
+    throw error;
+  }
+}
+
+async function sendAttachment(
+  file: File,
+  forceCsrf: boolean,
+  onProgress?: (fraction: number) => void,
+  signal?: AbortSignal,
+): Promise<ChatAttachment> {
+  const headers = await authHeaders("POST", forceCsrf);
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open("POST", `${API_BASE}/api/chat/attachments/`);
@@ -455,7 +473,8 @@ export async function uploadAttachment(
       const detail = (body as { detail?: string } | null)?.detail ?? xhr.statusText;
       reject(new ApiError(xhr.status, detail, body));
     };
-    xhr.onerror = () => reject(new ApiError(0, "network error"));
+    // No detail: the caller shows its own translated message for status 0.
+    xhr.onerror = () => reject(new ApiError(0, ""));
     xhr.onabort = () => reject(new ApiError(0, "aborted"));
     signal?.addEventListener("abort", () => xhr.abort());
     const form = new FormData();

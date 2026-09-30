@@ -250,7 +250,13 @@ async def prepare(state: AgentState) -> dict:
     messages = state["messages"]
     updates: dict = {"tool_rounds": 0}
 
-    if len(messages) > SUMMARIZE_AFTER_MESSAGES:
+    cut = len(messages) - 8
+    # Never cut between an AI tool call and its tool results: a kept tool
+    # message whose call was summarized away is rejected by the model.
+    while cut > 0 and messages[cut].type == "tool":
+        cut -= 1
+
+    if len(messages) > SUMMARIZE_AFTER_MESSAGES and cut > 0:
         # Collapse the oldest turns into a summary so num_ctx stays bounded.
         from langchain_ollama import ChatOllama
 
@@ -261,7 +267,7 @@ async def prepare(state: AgentState) -> dict:
             num_ctx=settings.LLM_NUM_CTX,
             reasoning=False,
         )
-        old = messages[:-8]
+        old = messages[:cut]
         try:
             response = await summarizer.ainvoke(
                 [
@@ -272,7 +278,12 @@ async def prepare(state: AgentState) -> dict:
                     HumanMessage(
                         # Text parts only: attachments put base64 images in
                         # message content, which must never reach this prompt.
-                        content="\n".join(f"{m.type}: {text_of(m)}" for m in old)[:8000]
+                        # The previous summary goes first so it is folded in,
+                        # not lost.
+                        content=(
+                            (f"Earlier summary:\n{previous}\n\n" if (previous := state.get("summary")) else "")
+                            + "\n".join(f"{m.type}: {text_of(m)}" for m in old)
+                        )[:8000]
                     ),
                 ]
             )
