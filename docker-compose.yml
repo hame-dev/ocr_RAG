@@ -15,6 +15,11 @@ x-ollama-env: &ollama-env
   RERANK_WORKERS: ${RERANK_WORKERS:-4}
   RERANK_TIMEOUT_S: ${RERANK_TIMEOUT_S:-8}
   RERANK_CALL_TIMEOUT_S: ${RERANK_CALL_TIMEOUT_S:-5}
+  CHUNK_CONTEXT_ENABLED: ${CHUNK_CONTEXT_ENABLED:-1}
+  CHUNK_CONTEXT_MODEL: ${CHUNK_CONTEXT_MODEL:-qwen3.5:4b}
+  CHUNK_CONTEXT_WINDOW_TOKENS: ${CHUNK_CONTEXT_WINDOW_TOKENS:-3000}
+  CHUNK_CONTEXT_WINDOW_CHUNKS: ${CHUNK_CONTEXT_WINDOW_CHUNKS:-6}
+  CHUNK_CONTEXT_PROMPT_VERSION: ${CHUNK_CONTEXT_PROMPT_VERSION:-v1}
 
 x-django-env: &django-env
   DJANGO_SETTINGS_MODULE: ${DJANGO_SETTINGS_MODULE:-config.settings.dev}
@@ -178,6 +183,9 @@ services:
 
   # llm queue is concurrency 1 on purpose: it serializes access to the single
   # host Ollama so VLM OCR, correction, enrichment and embedding never fight.
+  # llm_bg is background chunk contextualization; with the broker's "priority"
+  # queue order the worker always drains llm first, so a new upload's
+  # enrichment never waits behind a library-wide re-contextualization.
   worker-llm:
     <<: [*backend-build, *backend-volumes, *hosts]
     environment: {<<: [*django-env, *ollama-env], WORKER_NAME: llm}
@@ -189,7 +197,7 @@ services:
       - -l
       - info
       - -Q
-      - llm
+      - llm,llm_bg
       - -c
       - "1"
       - --max-tasks-per-child

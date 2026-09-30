@@ -42,7 +42,7 @@ class Command(BaseCommand):
         if options["contextualize_only"]:
             from rag.tasks import queue_contextualize
 
-            queued = sum(1 for doc_id in doc_ids if queue_contextualize(doc_id))
+            queued = sum(1 for doc_id in doc_ids if queue_contextualize(doc_id, force=True))
             self.stdout.write(self.style.SUCCESS(f"queued stage-2 contextualization for {queued} document(s)"))
             return
 

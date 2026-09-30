@@ -5,6 +5,7 @@ import logging
 import time
 
 from celery import shared_task
+from celery.exceptions import SoftTimeLimitExceeded
 from django.conf import settings
 from django.db import transaction
 
@@ -13,14 +14,20 @@ from common.ollama import get_client
 from documents.models import Document
 from rag.chunking import chunk_text
 from rag.context import build_context_header, build_context_text, embed_input
+from rag.contextualize import build_windows, merge_keywords, summarize_window, window_key, window_text
 from rag.keywords import extract_keywords, keywords_text
-from rag.models import Chunk, DocumentVector, IndexRun
+from rag.models import Chunk, ChunkContext, DocumentVector, IndexRun
 
 logger = logging.getLogger(__name__)
 
 EMBED_BATCH = 16
 # Bumped when the stage-2 output format changes; 0 means "stage 1 only".
 CONTEXT_VERSION = 1
+# Keywords in the weight-A lexical column after stage 2 merges its own in.
+MAX_CHUNK_KEYWORDS = 12
+# A soft time limit re-queues the task to carry on (finished windows are
+# cached and skipped); this bounds how many times.
+MAX_CONTEXT_CONTINUATIONS = 5
 
 
 def sha256(text: str) -> str:
@@ -177,6 +184,8 @@ def index_document(document_id: str):
             pass
 
         fsm.record_event(document, "indexed", {"chunks": len(rows)})
+        # Stage 2 in the background; the document is already searchable.
+        queue_contextualize(str(document.id), run.id)
         return {"chunks": len(rows), "duration_ms": run.duration_ms}
 
     except Exception as exc:
@@ -191,3 +200,180 @@ def index_document(document_id: str):
             pass
         fsm.record_event(document, "index_failed", {"error": str(exc)[:300]})
         return {"error": str(exc)}
+
+
+# ---- stage 2: background contextualization -------------------------------------
+
+
+def queue_contextualize(document_id: str, index_run_id: int | None = None, *, force: bool = False) -> bool:
+    """Queue stage 2 on the low-priority llm_bg queue. False if not queued.
+
+    `force` ignores CHUNK_CONTEXT_ENABLED (an explicit `reindex_all
+    --contextualize-only`).
+    """
+    if not (force or settings.CHUNK_CONTEXT_ENABLED):
+        return False
+    runs = IndexRun.objects.filter(document_id=document_id, status="succeeded")
+    run = runs.filter(id=index_run_id).first() if index_run_id else runs.first()
+    if run is None:
+        return False
+    IndexRun.objects.filter(id=run.id).update(context_status="queued", context_error="")
+    contextualize_document.apply_async(args=[str(document_id), run.id], queue="llm_bg")
+    return True
+
+
+def context_model(client) -> str:
+    """CHUNK_CONTEXT_MODEL if the host has it, else the main LLM."""
+    model = settings.CHUNK_CONTEXT_MODEL
+    if model and model != settings.LLM_MODEL:
+        try:
+            if client.has_model(model):
+                return model
+        except Exception:
+            logger.warning("could not check for %s", model, exc_info=True)
+        logger.warning("%s is not pulled; stage-2 context uses %s", model, settings.LLM_MODEL)
+    return settings.LLM_MODEL
+
+
+class _Aborted(Exception):
+    """The document changed under us; the remaining windows are moot."""
+
+
+@shared_task(
+    name="rag.tasks.contextualize_document",
+    soft_time_limit=settings.CHUNK_CONTEXT_SOFT_TIME_LIMIT_S,
+)
+def contextualize_document(document_id: str, index_run_id: int, continuation: int = 0):
+    """Section summaries + keywords per window of chunks, applied IN PLACE.
+
+    Never changes the document's status: stage 1 already made it READY. Each
+    window commits on its own, after re-checking that the document still has
+    the revision these chunks were built from and that every chunk still
+    exists; otherwise the run stops with no further writes.
+    """
+    run = IndexRun.objects.filter(id=index_run_id, document_id=document_id).first()
+    document = Document.objects.select_related("metadata").filter(id=document_id).first()
+    if run is None or document is None or run.status != "succeeded":
+        return {"skipped": "no such index run"}
+    revision_id = run.revision_id
+    if document.current_revision_id != revision_id:
+        IndexRun.objects.filter(id=run.id).update(context_status="aborted", context_error="revision changed")
+        return {"aborted": "revision changed"}
+
+    chunks = list(Chunk.objects.filter(document=document, revision_id=revision_id).order_by("chunk_index"))
+    if not chunks:
+        IndexRun.objects.filter(id=run.id).update(context_status="aborted", context_error="no chunks")
+        return {"aborted": "no chunks"}
+
+    client = get_client()
+    record = getattr(document, "metadata", None)
+    title = document_title(document, record)
+    doc_summary = record.summary_short if record else ""
+    language = record.primary_language if record else ""
+    version = settings.CHUNK_CONTEXT_PROMPT_VERSION
+    windows = build_windows(
+        chunks,
+        max_tokens=settings.CHUNK_CONTEXT_WINDOW_TOKENS,
+        max_chunks=settings.CHUNK_CONTEXT_WINDOW_CHUNKS,
+    )
+    model = context_model(client)
+    run.context_status, run.context_model = "running", model
+    run.context_windows, run.context_done, run.context_error = len(windows), 0, ""
+    run.save(update_fields=["context_status", "context_model", "context_windows", "context_done", "context_error"])
+
+    llm_calls = 0
+    try:
+        for done, window in enumerate(windows, start=1):
+            section = window[0].section_path
+            text = window_text(window)
+            key = window_key(title, section, text, model, version)
+            cached = ChunkContext.objects.filter(text_sha256=key, model_id=model, prompt_version=version).first()
+            if cached:
+                result = {"summary": cached.summary, "keywords": list(cached.keywords or [])}
+            else:
+                llm_calls += 1
+                result = summarize_window(client, model, title, doc_summary, section, text, language)
+                if result is not None:
+                    ChunkContext.objects.get_or_create(
+                        text_sha256=key, model_id=model, prompt_version=version,
+                        defaults={"summary": result["summary"], "keywords": result["keywords"]},
+                    )
+            if result is not None:
+                _apply_window(client, document_id, revision_id, window, result, model, title, doc_summary)
+            run.context_done = done
+            run.save(update_fields=["context_done"])
+            fsm.publish(document.id, "context_progress", {"done": done, "of": len(windows)})
+        run.context_status = "succeeded"
+    except _Aborted as exc:
+        run.context_status, run.context_error = "aborted", str(exc)
+    except SoftTimeLimitExceeded:
+        if continuation < MAX_CONTEXT_CONTINUATIONS:
+            run.context_status, run.context_error = "queued", "time limit; continuing"
+            run.save(update_fields=["context_status", "context_error"])
+            contextualize_document.apply_async(
+                args=[str(document_id), run.id, continuation + 1], queue="llm_bg"
+            )
+            return {"continued": run.context_done, "of": len(windows)}
+        run.context_status, run.context_error = "failed", "time limit"
+    except Exception as exc:
+        logger.exception("contextualization failed for %s", document_id)
+        run.context_status, run.context_error = "failed", str(exc)[:1000]
+    run.save(update_fields=["context_status", "context_error"])
+    fsm.record_event(document, "contextualized", {
+        "status": run.context_status, "windows": len(windows), "done": run.context_done, "llm_calls": llm_calls,
+    })
+    return {"status": run.context_status, "windows": len(windows), "llm_calls": llm_calls}
+
+
+def _apply_window(client, document_id, revision_id, window, result, model, title, doc_summary) -> int:
+    """Re-embed the window's chunks with the richer header; update in place."""
+    summary, window_keywords = result["summary"], result["keywords"]
+    changed: list[Chunk] = []
+    for chunk in window:
+        meta = dict(chunk.meta or {})
+        own = dict(meta.get("chunk") or {})
+        if (
+            own.get("summary") == summary
+            and own.get("context_keywords") == window_keywords
+            and own.get("context_model") == model
+            and own.get("context_version") == CONTEXT_VERSION
+        ):
+            continue
+        stage1 = own.get("keywords") or []
+        own.update({
+            "summary": summary,
+            "context_keywords": window_keywords,
+            "context_model": model,
+            "context_version": CONTEXT_VERSION,
+        })
+        own.setdefault("text_sha256", sha256(chunk.text))
+        meta["chunk"] = own
+        chunk.meta = meta
+        chunk.keywords_text = keywords_text(merge_keywords(stage1, window_keywords, cap=MAX_CHUNK_KEYWORDS))
+        chunk.context_text = build_context_text(chunk.section_path, summary)
+        changed.append(chunk)
+    if not changed:
+        return 0
+
+    vectors = client.embed([
+        embed_input(build_context_header(title, doc_summary, c.section_path, summary), c.text) for c in changed
+    ])
+    for chunk, vector in zip(changed, vectors):
+        chunk.embedding = vector
+
+    with transaction.atomic():
+        current = (
+            Document.objects.select_for_update()
+            .filter(id=document_id)
+            .values_list("current_revision_id", flat=True)
+            .first()
+        )
+        if current != revision_id:
+            raise _Aborted("revision changed")
+        updated = Chunk.objects.bulk_update(
+            changed, ["embedding", "meta", "keywords_text", "context_text"], batch_size=50
+        )
+        if updated != len(changed):
+            # Re-indexed meanwhile: these chunk ids are gone. Roll back.
+            raise _Aborted("chunks were replaced by a re-index")
+    return updated

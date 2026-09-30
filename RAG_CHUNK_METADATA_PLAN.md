@@ -191,7 +191,7 @@ queries **before** the retrieval changes land and keep the baseline JSON.
 - [x] **3.** Schema (`keywords_text`, `context_text`, `title_text`, `ChunkContext`, `DocumentVector`, `IndexRun.context_*`), migration 0003 with the weighted `tsv`, stage-1 indexing writes the new fields, `format_hits` exposes them, `reindex_all` command.
 - [x] **4.** Reranker: `OllamaClient.score_yes_no`, `rag/rerank.py`, `hybrid_search(rerank=, candidates=)`, settings, warmup script.
 - [x] **5.** `DocumentVector` upsert during indexing; semantic `list_documents`.
-- [ ] **6.** Stage 2: `rag/contextualize.py`, `contextualize_document` task on the `llm_bg` queue, cache, in-place updates, progress events, compose/route changes.
+- [x] **6.** Stage 2: `rag/contextualize.py`, `contextualize_document` task on the `llm_bg` queue, cache, in-place updates, progress events, compose/route changes.
 - [ ] **7.** `.env.example`, README, smoke test updates; run the eval before/after and record the numbers here.
 
 ## 7. Operating notes

@@ -17,6 +17,7 @@ from django.conf import settings
 from django.db import connection, transaction
 
 from common.ollama import get_client
+from rag.contextualize import merge_keywords
 
 logger = logging.getLogger(__name__)
 
@@ -232,7 +233,9 @@ def format_hits(hits: list[dict], max_chars: int = 1200) -> list[dict]:
             "page_end": hit["page_end"],
             "section": hit["section_path"],
             "context": _chunk_meta(hit).get("summary") or "",
-            "keywords": list(_chunk_meta(hit).get("keywords") or []),
+            "keywords": merge_keywords(
+                _chunk_meta(hit).get("keywords") or [], _chunk_meta(hit).get("context_keywords") or []
+            ),
             "text": hit["text"][:max_chars],
             "score": round(float(hit["score"] or 0), 5),
         }

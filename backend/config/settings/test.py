@@ -14,3 +14,4 @@ PASSWORD_HASHERS = ["django.contrib.auth.hashers.MD5PasswordHasher"]
 
 # Nothing in the suite talks to a real Ollama: no reranker, no stage-2 LLM pass.
 RERANK_ENABLED = False
+CHUNK_CONTEXT_ENABLED = False

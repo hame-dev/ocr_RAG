@@ -171,8 +171,13 @@ CELERY_TASK_ROUTES = {
     "ocr.tasks.run_ocr_engine_llm": {"queue": "llm"},
     "correction.tasks.*": {"queue": "llm"},
     "enrichment.tasks.*": {"queue": "llm"},
+    # Exact names beat the glob below in Celery's router.
+    "rag.tasks.contextualize_document": {"queue": "llm_bg"},
     "rag.tasks.*": {"queue": "index"},
 }
+# With Redis, a worker consuming `-Q llm,llm_bg` then always drains llm first,
+# so background contextualization never delays enrichment of a new upload.
+CELERY_BROKER_TRANSPORT_OPTIONS = {"queue_order_strategy": "priority"}
 
 # ---- Ollama -----------------------------------------------------------------
 # Runs on the HOST so it can use Metal. Containers reach it via
@@ -195,6 +200,17 @@ RERANK_CANDIDATES = int(os.environ.get("RERANK_CANDIDATES", "20"))
 RERANK_WORKERS = int(os.environ.get("RERANK_WORKERS", "4"))
 RERANK_TIMEOUT_S = float(os.environ.get("RERANK_TIMEOUT_S", "8"))
 RERANK_CALL_TIMEOUT_S = float(os.environ.get("RERANK_CALL_TIMEOUT_S", "5"))
+
+# ---- Retrieval: stage-2 chunk context ------------------------------------------
+# After indexing, a background task (queue llm_bg, drained after llm) writes a
+# section summary + keywords per window of chunks and re-embeds them in place.
+# Cached by content in ChunkContext; bump the prompt version to regenerate.
+CHUNK_CONTEXT_ENABLED = _env_bool("CHUNK_CONTEXT_ENABLED", True)
+CHUNK_CONTEXT_MODEL = os.environ.get("CHUNK_CONTEXT_MODEL", "qwen3.5:4b")
+CHUNK_CONTEXT_WINDOW_TOKENS = int(os.environ.get("CHUNK_CONTEXT_WINDOW_TOKENS", "3000"))
+CHUNK_CONTEXT_WINDOW_CHUNKS = int(os.environ.get("CHUNK_CONTEXT_WINDOW_CHUNKS", "6"))
+CHUNK_CONTEXT_PROMPT_VERSION = os.environ.get("CHUNK_CONTEXT_PROMPT_VERSION", "v1")
+CHUNK_CONTEXT_SOFT_TIME_LIMIT_S = int(os.environ.get("CHUNK_CONTEXT_SOFT_TIME_LIMIT_S", "1800"))
 
 # ---- General chat code runner ---------------------------------------------------
 # Sandboxed sidecar (docker/code-runner) for the Python General chat writes.

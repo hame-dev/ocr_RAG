@@ -119,13 +119,15 @@ def test_format_hits_exposes_section_context_and_keywords(document, monkeypatch)
     chunk = _chunk(document, 0, text="The deposit is refundable.", keywords_text="deposit; refund",
                    context_text="3. Deposit. Rules for the security deposit.")
     chunk.section_path = "3. Deposit"
-    chunk.meta = {"chunk": {"summary": "Rules for the security deposit.", "keywords": ["deposit", "refund"]}}
+    chunk.meta = {"chunk": {"summary": "Rules for the security deposit.", "keywords": ["deposit", "refund"],
+                            "context_keywords": ["Refund", "security deposit"]}}
     chunk.save()
 
     [hit] = format_hits(hybrid_search("deposit", top_k=5, doc_ids=[str(document.id)]))
     assert hit["section"] == "3. Deposit"
     assert hit["context"] == "Rules for the security deposit."
-    assert hit["keywords"] == ["deposit", "refund"]
+    # Stage-1 keywords, then stage-2 ones, de-duplicated.
+    assert hit["keywords"] == ["deposit", "refund", "security deposit"]
 
 
 @pytest.mark.django_db
