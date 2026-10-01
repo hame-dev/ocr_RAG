@@ -135,7 +135,17 @@ def rerank(
         # Never wait on stragglers: their results are simply not used.
         executor.shutdown(wait=False, cancel_futures=True)
 
-    scored = sorted(scores, key=lambda i: scores[i], reverse=True)
+    if scores and not any(scores.values()):
+        # P(yes) and P(no) were both zero for every pair: the model is not
+        # answering the question at all (a broken build, or the wrong prompt
+        # for it). Its order would be noise; the fused order stands.
+        logger.warning("reranker %s produced neither 'yes' nor 'no' for any of %d pairs; keeping RRF order",
+                       model, len(scores))
+        return hits[:top_k]
+
+    # Sort by score, ties broken by the fused order (never by which call
+    # happened to finish first); unscored hits follow in fused order.
+    scored = sorted(scores, key=lambda i: (-scores[i], i))
     unscored = [i for i in range(len(hits)) if i not in scores]
     out = []
     for i in scored + unscored:

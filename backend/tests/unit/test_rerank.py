@@ -220,3 +220,23 @@ def test_search_endpoint_passes_rerank_and_candidates(auth_client, monkeypatch):
 
     r = auth_client.post("/api/search/", {"query": "rent", "rerank": "yes"}, content_type="application/json")
     assert r.status_code == 400
+
+
+def test_tied_scores_keep_the_rrf_order(monkeypatch):
+    """Equal scores must not reorder by which Ollama call finished first."""
+    scorer = _Scorer({"c0": 0.5, "c1": 0.5, "c2": 0.5}, sleep={"c0": 0.3, "c1": 0.15})
+    monkeypatch.setattr(rerank, "get_client", lambda: scorer)
+    out = rerank.rerank("q", _hits(3), top_k=3, model="m")
+    assert [h["chunk_id"] for h in out] == ["c0", "c1", "c2"]
+
+
+def test_a_reranker_that_never_answers_yes_or_no_is_ignored(monkeypatch, caplog):
+    """All-zero scores mean the model produced neither token (wrong build or
+    prompt): the RRF order stands and the hits keep their fused score."""
+    scorer = _Scorer({"c0": 0.0, "c1": 0.0, "c2": 0.0}, sleep={"c0": 0.2})
+    monkeypatch.setattr(rerank, "get_client", lambda: scorer)
+    out = rerank.rerank("rent?", _hits(3), top_k=2, model="m")
+    assert [h["chunk_id"] for h in out] == ["c0", "c1"]
+    assert out[0]["score"] == out[0]["rrf"] == 1.0
+    assert "rerank_score" not in out[0]
+    assert "neither" in caplog.text.lower()

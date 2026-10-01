@@ -83,9 +83,9 @@ The interface defaults to English and switches to Arabic with full RTL layout; t
 
 - Docker Desktop, ~8 GB free
 - [Ollama](https://ollama.com) running on the host
-- ~19 GB for models: `qwen3.5:9b` (6.6 GB), `fredrezones55/chandra-ocr-2` (5.8 GB),
-  `qwen3.5:4b` (3.4 GB, background chunk context), `bge-m3` (1.2 GB),
-  `surya-ocr-2` (609 MB), `dengcao/Qwen3-Reranker-0.6B:Q8_0` (search reranker)
+- ~18 GB for models: `qwen3.5:9b` (6.6 GB), `fredrezones55/chandra-ocr-2` (5.8 GB),
+  `qwen3.5:4b` (3.4 GB, search reranking and background chunk context),
+  `bge-m3` (1.2 GB), `surya-ocr-2` (609 MB)
 
 ```bash
 cp .env.example .env
@@ -212,10 +212,14 @@ Every chunk carries its own metadata, not only a copy of the document's:
   so a new upload waits at most for a few windows, not a whole document.
   Progress is published as `context_progress` events.
 - **Search.** Hybrid (pgvector + weighted tsvector, RRF) fetches
-  `RERANK_CANDIDATES` rows and a Qwen3-Reranker on Ollama reorders them. Any
-  reranker failure or deadline keeps the RRF order. Pass `"rerank": false` to
-  `/api/search/` to compare. Parallel reranking needs `OLLAMA_NUM_PARALLEL>=4`
-  on the host Ollama; otherwise lower `RERANK_CANDIDATES` if searches feel slow.
+  `RERANK_CANDIDATES` rows and `RERANK_MODEL` (default `qwen3.5:4b`) judges each
+  one yes/no on Ollama; the top results are ordered by P(yes). Any failure,
+  the deadline, or a model that never answers yes/no keeps the RRF order. Pass
+  `"rerank": false` to `/api/search/` to compare. The dedicated
+  `Qwen3-Reranker` GGUF builds on the Ollama registry return flat logits in
+  Ollama 0.34 and are unusable there. Expect ~0.5 s per pair on an M-series
+  Mac; parallel scoring needs `OLLAMA_NUM_PARALLEL>=4` on the host Ollama,
+  otherwise keep `RERANK_CANDIDATES` small enough to fit `RERANK_TIMEOUT_S`.
 
 ```bash
 make reindex-all                            # re-index everything (stage 1, then stage 2)

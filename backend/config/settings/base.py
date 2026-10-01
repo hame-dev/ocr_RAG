@@ -191,12 +191,18 @@ EMBED_DIMS = int(os.environ.get("EMBED_DIMS", "1024"))
 LLM_NUM_CTX = int(os.environ.get("LLM_NUM_CTX", "16384"))
 
 # ---- Retrieval: reranking --------------------------------------------------------
-# Hybrid search fetches RERANK_CANDIDATES fused rows and a Qwen3-Reranker on
-# Ollama reorders them. Any failure or the deadline falls back to RRF order.
+# Hybrid search fetches RERANK_CANDIDATES fused rows and an Ollama model judges
+# each (query, passage) pair yes/no; the top_k by P(yes) are returned. Any
+# failure or the deadline falls back to RRF order.
+# The judge is the small instruct model, not a dedicated reranker: the
+# Qwen3-Reranker GGUF builds on the Ollama registry (dengcao/...) return flat
+# logits in Ollama 0.34 (every token equally likely), so they cannot answer.
+# qwen3.5:4b scores ~0.5 s per pair on an M-series Mac with Ollama's default
+# OLLAMA_NUM_PARALLEL=1, which is why the candidate count is 10, not 20.
 # Parallel workers only help when the host runs OLLAMA_NUM_PARALLEL >= workers.
 RERANK_ENABLED = _env_bool("RERANK_ENABLED", True)
-RERANK_MODEL = os.environ.get("RERANK_MODEL", "dengcao/Qwen3-Reranker-0.6B:Q8_0")
-RERANK_CANDIDATES = int(os.environ.get("RERANK_CANDIDATES", "20"))
+RERANK_MODEL = os.environ.get("RERANK_MODEL", "qwen3.5:4b")
+RERANK_CANDIDATES = int(os.environ.get("RERANK_CANDIDATES", "10"))
 RERANK_WORKERS = int(os.environ.get("RERANK_WORKERS", "4"))
 RERANK_TIMEOUT_S = float(os.environ.get("RERANK_TIMEOUT_S", "8"))
 RERANK_CALL_TIMEOUT_S = float(os.environ.get("RERANK_CALL_TIMEOUT_S", "5"))

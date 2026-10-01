@@ -158,8 +158,8 @@ CREATE INDEX IF NOT EXISTS chunk_tsv ON rag_chunk USING gin (tsv);
 | Setting | Default | Meaning |
 |---|---|---|
 | `RERANK_ENABLED` | `1` | Rerank hybrid candidates (off in the test settings) |
-| `RERANK_MODEL` | `dengcao/Qwen3-Reranker-0.6B:Q8_0` | Ollama model used for scoring |
-| `RERANK_CANDIDATES` | `20` | Fused rows fetched before reranking (deep research uses 12) |
+| `RERANK_MODEL` | `qwen3.5:4b` | Ollama model that judges each pair yes/no. The dedicated `dengcao/Qwen3-Reranker-0.6B` GGUF builds return flat logits (ln(1/151936) for every token) in Ollama 0.34.1, so they cannot be used there; the small instruct model answers correctly (measured 0.87–0.94 for the matching contracts, 0.07 for an invoice) |
+| `RERANK_CANDIDATES` | `10` | Fused rows fetched before reranking (deep research uses 12). ~0.5 s per pair on an M-series Mac with `OLLAMA_NUM_PARALLEL=1` |
 | `RERANK_WORKERS` | `4` | Parallel scoring threads (only helps if the host runs `OLLAMA_NUM_PARALLEL>=4`) |
 | `RERANK_TIMEOUT_S` | `8` | Overall deadline per search; unscored candidates keep RRF order |
 | `RERANK_CALL_TIMEOUT_S` | `5` | Per-pair timeout |
@@ -202,7 +202,9 @@ queries **before** the retrieval changes land and keep the baseline JSON.
 - New documents are searchable as soon as stage 1 finishes; stage 2 improves
   them later. Existing documents need `make reindex-all` once after deploying.
 - The reranker model is pulled by `make warmup`. If it is missing, search logs
-  one warning and falls back to RRF order.
+  one warning and falls back to RRF order. The first search after the model has
+  been idle pays its load time (~10 s for `qwen3.5:4b`) and usually falls back
+  once; `keep_alive` then keeps it loaded for 30 minutes.
 - The `worker-llm` container takes `llm` work before `llm_bg`, and each stage-2
   task re-queues itself after `CHUNK_CONTEXT_WINDOWS_PER_TASK` (4) LLM calls, so
   enrichment of a new upload waits for at most a few windows.

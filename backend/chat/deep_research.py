@@ -30,8 +30,6 @@ MAX_SEARCH_ATTEMPTS = 3
 HITS_PER_QUERY = 6
 MIN_CONFIDENCE = 0.6
 EXCERPT_CHARS = 700
-# Fewer rerank candidates than chat search: deep research runs many queries.
-RERANK_CANDIDATES = 12
 MAX_PASSAGES = 14
 
 
@@ -39,10 +37,10 @@ async def _search(query: str, doc_ids: list[str]) -> list[dict]:
     if not doc_ids:
         return []
     search = sync_to_async(hybrid_search, thread_sensitive=True)
-    return format_hits(
-        await search(query, top_k=HITS_PER_QUERY, doc_ids=doc_ids, candidates=RERANK_CANDIDATES),
-        max_chars=EXCERPT_CHARS,
-    )
+    # Reranking uses the shared RERANK_CANDIDATES: deep research runs several
+    # queries per answer, so a larger candidate pool here would overrun the
+    # reranker's deadline on every one of them.
+    return format_hits(await search(query, top_k=HITS_PER_QUERY, doc_ids=doc_ids), max_chars=EXCERPT_CHARS)
 
 
 async def deep_research(state) -> dict:
