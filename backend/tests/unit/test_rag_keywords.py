@@ -1,6 +1,8 @@
 """Per-chunk keyword extraction (statistical, no LLM) for Arabic and English."""
 from __future__ import annotations
 
+import pytest
+
 from rag.keywords import extract_keywords, keywords_text
 
 EN = (
@@ -52,3 +54,16 @@ def test_empty_text_gives_no_keywords():
 def test_keywords_text_joins_for_lexical_search():
     assert keywords_text(["annual rent", "security deposit"]) == "annual rent; security deposit"
     assert keywords_text([]) == ""
+
+
+def test_a_missing_yake_fails_loudly_instead_of_returning_no_keywords(monkeypatch):
+    """An image without yake must not index a library with empty keywords:
+    the ImportError propagates so the index task fails and says why."""
+    import sys
+
+    from rag import keywords
+
+    monkeypatch.setattr(keywords, "_extractors", {})
+    monkeypatch.setitem(sys.modules, "yake", None)
+    with pytest.raises(ImportError):
+        keywords.extract_keywords("The tenant pays the annual rent monthly.", "en")

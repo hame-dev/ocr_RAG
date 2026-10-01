@@ -121,6 +121,8 @@ async def list_documents(
     keywords and topics), in any language, most relevant first; `similarity`
     says how close each one is. Without `query`, it lists the library.
     """
+    if not allowed_doc_ids:  # None is deny too: see _document_is_allowed
+        return []
     query = (query or "").strip() or None
     query_vector = None
     if query:

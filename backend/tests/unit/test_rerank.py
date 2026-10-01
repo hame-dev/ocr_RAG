@@ -75,9 +75,10 @@ def test_the_chosen_token_counts_even_outside_top_logprobs(post):
 # ---- rerank() ----------------------------------------------------------------
 
 def _hits(n: int) -> list[dict]:
+    # As hybrid_search hands them to the reranker: fused score in both keys.
     return [
         {"chunk_id": f"c{i}", "document_title": "Lease", "section_path": "", "meta": {},
-         "text": f"passage {i}", "score": 1.0 / (i + 1)}
+         "text": f"passage {i}", "score": 1.0 / (i + 1), "rrf": 1.0 / (i + 1)}
         for i in range(n)
     ]
 

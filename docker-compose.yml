@@ -21,6 +21,7 @@ x-ollama-env: &ollama-env
   CHUNK_CONTEXT_WINDOW_CHUNKS: ${CHUNK_CONTEXT_WINDOW_CHUNKS:-6}
   CHUNK_CONTEXT_PROMPT_VERSION: ${CHUNK_CONTEXT_PROMPT_VERSION:-v1}
   CHUNK_CONTEXT_WINDOWS_PER_TASK: ${CHUNK_CONTEXT_WINDOWS_PER_TASK:-4}
+  CHUNK_CONTEXT_SOFT_TIME_LIMIT_S: ${CHUNK_CONTEXT_SOFT_TIME_LIMIT_S:-1800}
   DOC_SEARCH_MIN_SIMILARITY: ${DOC_SEARCH_MIN_SIMILARITY:-0.45}
 
 x-django-env: &django-env
@@ -148,6 +149,8 @@ services:
       timeout: 5s
       retries: 12
       start_period: 30s
+    # Comes back after an OOM kill or a daemon restart, like the workers.
+    restart: unless-stopped
     mem_limit: 3g
 
   # Two services rather than two workers in one container: with `&` + `wait`,
@@ -221,6 +224,7 @@ services:
     depends_on:
       redis: {condition: service_healthy}
       migrate: {condition: service_completed_successfully}
+    restart: unless-stopped
     mem_limit: 512m
 
   frontend:
@@ -244,6 +248,12 @@ services:
       - "3000:3000"
     depends_on:
       backend: {condition: service_started}
+    # The dev compiler is the first thing the kernel OOM-kills when the Docker
+    # VM is short on memory (e.g. a document is being processed while a new
+    # route compiles). Without this the container stays down afterwards.
+    # Give the Docker Desktop VM >= 12 GB: the limits above add up to far more
+    # than its 8 GB default.
+    restart: unless-stopped
     mem_limit: 3g
 
   # Runs the Python that General chat writes (maths, charts, Excel / Word /

@@ -224,23 +224,23 @@ def format_hits(hits: list[dict], max_chars: int = 1200) -> list[dict]:
     `keywords` the chunk's own keywords, so the agent can tell passages apart
     without reading every one in full.
     """
-    return [
-        {
-            "chunk_id": str(hit["chunk_id"]),
-            "document_id": str(hit["document_id"]),
-            "document_title": hit["document_title"] or hit["original_filename"],
-            "page_start": hit["page_start"],
-            "page_end": hit["page_end"],
-            "section": hit["section_path"],
-            "context": _chunk_meta(hit).get("summary") or "",
-            "keywords": merge_keywords(
-                _chunk_meta(hit).get("keywords") or [], _chunk_meta(hit).get("context_keywords") or []
-            ),
-            "text": hit["text"][:max_chars],
-            "score": round(float(hit["score"] or 0), 5),
-        }
-        for hit in hits
-    ]
+    return [_format_hit(hit, max_chars) for hit in hits]
+
+
+def _format_hit(hit: dict, max_chars: int) -> dict:
+    own = _chunk_meta(hit)
+    return {
+        "chunk_id": str(hit["chunk_id"]),
+        "document_id": str(hit["document_id"]),
+        "document_title": hit["document_title"] or hit["original_filename"],
+        "page_start": hit["page_start"],
+        "page_end": hit["page_end"],
+        "section": hit["section_path"],
+        "context": own.get("summary") or "",
+        "keywords": merge_keywords(own.get("keywords") or [], own.get("context_keywords") or []),
+        "text": hit["text"][:max_chars],
+        "score": round(float(hit["score"] or 0), 5),
+    }
 
 
 def _chunk_meta(hit: dict) -> dict:

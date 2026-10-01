@@ -60,6 +60,10 @@ def _clean(keyword: str, lang: str) -> str | None:
 def _scored(text: str, lang: str, top: int) -> list[tuple[float, str]]:
     try:
         pairs = _extractor(lang, top).extract_keywords(text)
+    except ImportError:
+        # An image without yake must fail the index task, not quietly produce
+        # a library with no keywords (which --only-missing would then skip).
+        raise
     except Exception:
         logger.warning("keyword extraction failed (lang=%s)", lang, exc_info=True)
         return []

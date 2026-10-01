@@ -89,3 +89,32 @@ def test_a_short_one_line_block_is_not_a_heading():
 @pytest.mark.parametrize("line", ["الْفَصْلُ الأَوَّلُ: التَّعْرِيفَاتُ", "مُقَدِّمَةٌ عامة"])
 def test_vocalised_arabic_headings_are_detected(line):
     assert _is_heading(line, block_lines=3)
+
+
+def test_the_tokenizer_is_loaded_once_even_from_concurrent_threads(monkeypatch):
+    import threading
+    import time
+
+    import tokenizers
+
+    loads = []
+
+    class SlowTokenizer:
+        @staticmethod
+        def from_pretrained(name):
+            loads.append(name)
+            time.sleep(0.2)
+            return object()
+
+    # Undo this module's autouse patch: this test wants the real loader.
+    monkeypatch.undo()
+    monkeypatch.setattr(tokenizers, "Tokenizer", SlowTokenizer)
+    monkeypatch.setattr(chunking, "_tokenizer", None)
+    monkeypatch.setattr(chunking, "_tokenizer_failed", False)
+
+    threads = [threading.Thread(target=chunking.get_tokenizer) for _ in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert loads == ["BAAI/bge-m3"]

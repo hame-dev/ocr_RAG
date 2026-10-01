@@ -10,7 +10,7 @@ from django.conf import settings
 from django.db import transaction
 
 from common import fsm
-from common.ollama import get_client
+from common.ollama import OllamaError, get_client
 from documents.models import Document
 from rag.chunking import chunk_text
 from rag.context import build_context_header, build_context_text, embed_input
@@ -28,6 +28,9 @@ MAX_CHUNK_KEYWORDS = 12
 # A soft time limit re-queues the task to carry on (finished windows are
 # cached and skipped); this bounds how many times in a row.
 MAX_CONTEXT_CONTINUATIONS = 5
+# A transient Ollama error (restart, timeout) re-queues the task with a
+# backoff; this bounds how many times before the run is marked failed.
+MAX_CONTEXT_RETRIES = 3
 
 
 def sha256(text: str) -> str:
@@ -201,9 +204,6 @@ def index_document(document_id: str):
             pass
 
         fsm.record_event(document, "indexed", {"chunks": len(rows)})
-        # Stage 2 in the background; the document is already searchable.
-        queue_contextualize(str(document.id), run.id)
-        return {"chunks": len(rows), "duration_ms": run.duration_ms}
 
     except Exception as exc:
         logger.exception("indexing failed for %s", document_id)
@@ -217,6 +217,15 @@ def index_document(document_id: str):
             pass
         fsm.record_event(document, "index_failed", {"error": str(exc)[:300]})
         return {"error": str(exc)}
+
+    # Stage 2 in the background; the document is already searchable. Outside
+    # the try above: a broker error here must not undo a successful index.
+    try:
+        queue_contextualize(str(document.id), run.id)
+    except Exception as exc:
+        logger.exception("could not queue stage-2 context for %s", document_id)
+        IndexRun.objects.filter(id=run.id).update(context_status="failed", context_error=str(exc)[:1000])
+    return {"chunks": len(rows), "duration_ms": run.duration_ms}
 
 
 # ---- stage 2: background contextualization -------------------------------------
@@ -240,14 +249,16 @@ def queue_contextualize(document_id: str, index_run_id: int | None = None, *, fo
 
 
 def context_model(client) -> str:
-    """CHUNK_CONTEXT_MODEL if the host has it, else the main LLM."""
+    """CHUNK_CONTEXT_MODEL if the host has it, else the main LLM.
+
+    A failed check (Ollama unreachable, /api/tags timing out under load)
+    raises: silently switching a document to the big model would be slower and
+    would cache its summaries under a different key.
+    """
     model = settings.CHUNK_CONTEXT_MODEL
     if model and model != settings.LLM_MODEL:
-        try:
-            if client.has_model(model):
-                return model
-        except Exception:
-            logger.warning("could not check for %s", model, exc_info=True)
+        if client.has_model(model):
+            return model
         logger.warning("%s is not pulled; stage-2 context uses %s", model, settings.LLM_MODEL)
     return settings.LLM_MODEL
 
@@ -260,13 +271,18 @@ class _Aborted(Exception):
     name="rag.tasks.contextualize_document",
     soft_time_limit=settings.CHUNK_CONTEXT_SOFT_TIME_LIMIT_S,
 )
-def contextualize_document(document_id: str, index_run_id: int, continuation: int = 0):
+def contextualize_document(document_id: str, index_run_id: int, continuation: int = 0, retries: int = 0):
     """Section summaries + keywords per window of chunks, applied IN PLACE.
 
     Never changes the document's status: stage 1 already made it READY. Each
     window commits on its own, after re-checking that the document still has
     the revision these chunks were built from and that every chunk still
     exists; otherwise the run stops with no further writes.
+
+    Every window ends up in the ChunkContext cache, including one the model
+    could not summarize (stored with an empty summary, so the chunks keep
+    their stage-1 data), which is what guarantees a re-queued task makes
+    progress instead of repeating the same calls.
     """
     run = IndexRun.objects.filter(id=index_run_id, document_id=document_id).first()
     document = Document.objects.select_related("metadata").filter(id=document_id).first()
@@ -277,12 +293,16 @@ def contextualize_document(document_id: str, index_run_id: int, continuation: in
         IndexRun.objects.filter(id=run.id).update(context_status="aborted", context_error="revision changed")
         return {"aborted": "revision changed"}
 
-    chunks = list(Chunk.objects.filter(document=document, revision_id=revision_id).order_by("chunk_index"))
+    # The embedding is only ever written here, never read: leave it out.
+    chunks = list(
+        Chunk.objects.filter(document=document, revision_id=revision_id)
+        .defer("embedding")
+        .order_by("chunk_index")
+    )
     if not chunks:
         IndexRun.objects.filter(id=run.id).update(context_status="aborted", context_error="no chunks")
         return {"aborted": "no chunks"}
 
-    client = get_client()
     record = getattr(document, "metadata", None)
     title = document_title(document, record)
     doc_summary = record.summary_short if record else ""
@@ -293,13 +313,16 @@ def contextualize_document(document_id: str, index_run_id: int, continuation: in
         max_tokens=settings.CHUNK_CONTEXT_WINDOW_TOKENS,
         max_chunks=settings.CHUNK_CONTEXT_WINDOW_CHUNKS,
     )
-    model = context_model(client)
-    run.context_status, run.context_model = "running", model
+    run.context_status = "running"
     run.context_windows, run.context_done, run.context_error = len(windows), 0, ""
-    run.save(update_fields=["context_status", "context_model", "context_windows", "context_done", "context_error"])
+    run.save(update_fields=["context_status", "context_windows", "context_done", "context_error"])
 
     llm_calls = 0
     try:
+        client = get_client()
+        model = context_model(client)
+        run.context_model = model
+        run.save(update_fields=["context_model"])
         for done, window in enumerate(windows, start=1):
             section = window[0].section_path
             text = window_text(window)
@@ -310,12 +333,15 @@ def contextualize_document(document_id: str, index_run_id: int, continuation: in
             else:
                 llm_calls += 1
                 result = summarize_window(client, model, title, doc_summary, section, text, language)
-                if result is not None:
-                    ChunkContext.objects.get_or_create(
-                        text_sha256=key, model_id=model, prompt_version=version,
-                        defaults={"summary": result["summary"], "keywords": result["keywords"]},
-                    )
-            if result is not None:
+                if result is None:
+                    # Remembered as a miss so the next run does not pay for it
+                    # again; bump CHUNK_CONTEXT_PROMPT_VERSION to retry these.
+                    result = {"summary": "", "keywords": []}
+                ChunkContext.objects.get_or_create(
+                    text_sha256=key, model_id=model, prompt_version=version,
+                    defaults={"summary": result["summary"], "keywords": result["keywords"]},
+                )
+            if result["summary"]:
                 _apply_window(client, document_id, revision_id, window, result, model, title, doc_summary)
             run.context_done = done
             run.save(update_fields=["context_done"])
@@ -327,18 +353,32 @@ def contextualize_document(document_id: str, index_run_id: int, continuation: in
                 run.context_status = "queued"
                 run.save(update_fields=["context_status"])
                 contextualize_document.apply_async(
-                    args=[str(document_id), run.id, continuation], queue="llm_bg"
+                    args=[str(document_id), run.id, continuation, retries], queue="llm_bg"
                 )
                 return {"continued": done, "of": len(windows), "llm_calls": llm_calls}
         run.context_status = "succeeded"
     except _Aborted as exc:
         run.context_status, run.context_error = "aborted", str(exc)
+    except OllamaError as exc:
+        # Ollama restarting or overloaded: try again later, with backoff, so
+        # a blip during a library-wide pass does not leave documents behind.
+        if retries < MAX_CONTEXT_RETRIES:
+            run.context_status, run.context_error = "queued", f"retrying after: {exc}"[:1000]
+            run.save(update_fields=["context_status", "context_error"])
+            contextualize_document.apply_async(
+                args=[str(document_id), run.id, continuation, retries + 1],
+                queue="llm_bg",
+                countdown=60 * 2 ** retries,
+            )
+            return {"retry": retries + 1, "error": str(exc)[:300]}
+        logger.warning("contextualization gave up after %s retries for %s: %s", retries, document_id, exc)
+        run.context_status, run.context_error = "failed", str(exc)[:1000]
     except SoftTimeLimitExceeded:
         if continuation < MAX_CONTEXT_CONTINUATIONS:
             run.context_status, run.context_error = "queued", "time limit; continuing"
             run.save(update_fields=["context_status", "context_error"])
             contextualize_document.apply_async(
-                args=[str(document_id), run.id, continuation + 1], queue="llm_bg"
+                args=[str(document_id), run.id, continuation + 1, retries], queue="llm_bg"
             )
             return {"continued": run.context_done, "of": len(windows)}
         run.context_status, run.context_error = "failed", "time limit"

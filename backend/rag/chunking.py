@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 import re
+import threading
 import unicodedata
 from dataclasses import dataclass, field
 
@@ -32,23 +33,29 @@ SEPARATORS = ["\n\n", "\n", "۔", ".", "؟", "?", "!", "؛", ";", "،", ",", " "
 
 _tokenizer = None
 _tokenizer_failed = False
+# The reranker tokenizes from several threads at once; without the lock a cold
+# process would fetch and parse the tokenizer once per thread.
+_tokenizer_lock = threading.Lock()
 
 
 def get_tokenizer():
     global _tokenizer, _tokenizer_failed
     if _tokenizer is not None or _tokenizer_failed:
         return _tokenizer
-    try:
-        from tokenizers import Tokenizer
+    with _tokenizer_lock:
+        if _tokenizer is not None or _tokenizer_failed:
+            return _tokenizer
+        try:
+            from tokenizers import Tokenizer
 
-        _tokenizer = Tokenizer.from_pretrained("BAAI/bge-m3")
-    except Exception:
-        logger.warning(
-            "bge-m3 tokenizer unavailable; falling back to the length heuristic "
-            "(chunk sizes will be approximate)",
-            exc_info=True,
-        )
-        _tokenizer_failed = True
+            _tokenizer = Tokenizer.from_pretrained("BAAI/bge-m3")
+        except Exception:
+            logger.warning(
+                "bge-m3 tokenizer unavailable; falling back to the length heuristic "
+                "(chunk sizes will be approximate)",
+                exc_info=True,
+            )
+            _tokenizer_failed = True
     return _tokenizer
 
 

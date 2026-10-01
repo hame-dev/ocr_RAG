@@ -314,3 +314,149 @@ def test_stage2_yields_the_llm_worker_after_a_few_windows(indexed, monkeypatch, 
     assert fake.generate_calls == 2
     run = IndexRun.objects.filter(document=indexed).first()
     assert (run.context_status, run.context_done, run.context_windows) == ("succeeded", 2, 2)
+
+
+# ---- review fixes ------------------------------------------------------------
+
+
+@pytest.mark.django_db
+def test_windows_that_fail_validation_do_not_loop_the_task_forever(indexed, monkeypatch, settings):
+    """Every window fails validation: the task must still finish (each failed
+    window is remembered so the next run skips it), not re-queue itself with
+    the same work forever."""
+    from rag import tasks
+    from rag.models import IndexRun
+
+    settings.CHUNK_CONTEXT_WINDOWS_PER_TASK = 1
+
+    class Garbage(_FakeOllama):
+        def generate_json(self, model, prompt, schema, **kwargs):
+            self.generate_calls += 1
+            return {"summary": "", "keywords": []}, '{"summary": ""}'
+
+    fake = Garbage()
+    monkeypatch.setattr("rag.tasks.get_client", lambda: fake)
+    runs = []
+    original = tasks.contextualize_document.apply_async
+    monkeypatch.setattr(tasks.contextualize_document, "apply_async",
+                        lambda *a, **k: (runs.append(1), original(*a, **k))[1])
+
+    tasks.queue_contextualize(str(indexed.id))
+
+    run = IndexRun.objects.filter(document=indexed).first()
+    assert run.context_status == "succeeded"
+    assert len(runs) <= 3  # first run + at most one continuation per window
+    # 2 windows x (call + one repair), never more.
+    assert fake.generate_calls == 4
+    assert all(c.meta["chunk"]["summary"] == "" for c in _chunks(indexed))
+
+    # And a later run makes no LLM calls for those windows.
+    again = Garbage()
+    monkeypatch.setattr("rag.tasks.get_client", lambda: again)
+    tasks.queue_contextualize(str(indexed.id))
+    assert again.generate_calls == 0
+
+
+@pytest.mark.django_db
+def test_an_enqueue_failure_after_indexing_keeps_the_document_ready(indexed, monkeypatch, settings):
+    from rag import tasks
+    from rag.models import IndexRun
+
+    monkeypatch.setattr("rag.tasks.get_client", lambda: _FakeOllama())
+
+    def broker_down(*a, **k):
+        raise RuntimeError("broker unavailable")
+
+    monkeypatch.setattr(tasks.contextualize_document, "apply_async", broker_down)
+    tasks.index_document(str(indexed.id))
+
+    indexed.refresh_from_db()
+    assert indexed.status == fsm.READY
+    run = IndexRun.objects.filter(document=indexed).first()
+    assert run.status == "succeeded"
+    assert run.context_status == "failed"
+
+
+@pytest.mark.django_db
+def test_a_transient_ollama_error_requeues_stage_2_instead_of_failing_it(indexed, monkeypatch):
+    from common.ollama import OllamaError
+    from rag import tasks
+    from rag.models import IndexRun
+
+    class Flaky(_FakeOllama):
+        def generate_json(self, model, prompt, schema, **kwargs):
+            if self.generate_calls == 0:
+                self.generate_calls += 1
+                raise OllamaError("connection refused")
+            return super().generate_json(model, prompt, schema, **kwargs)
+
+    fake = Flaky()
+    monkeypatch.setattr("rag.tasks.get_client", lambda: fake)
+    tasks.queue_contextualize(str(indexed.id))
+
+    run = IndexRun.objects.filter(document=indexed).first()
+    assert run.context_status == "succeeded"
+    assert all(c.meta["chunk"]["summary"] for c in _chunks(indexed))
+
+
+@pytest.mark.django_db
+def test_stage_2_gives_up_after_repeated_ollama_errors(indexed, monkeypatch):
+    from common.ollama import OllamaError
+    from rag import tasks
+    from rag.models import IndexRun
+
+    class Down(_FakeOllama):
+        def generate_json(self, model, prompt, schema, **kwargs):
+            self.generate_calls += 1
+            raise OllamaError("connection refused")
+
+    fake = Down()
+    monkeypatch.setattr("rag.tasks.get_client", lambda: fake)
+    tasks.queue_contextualize(str(indexed.id))
+
+    run = IndexRun.objects.filter(document=indexed).first()
+    assert run.context_status == "failed"
+    assert "connection refused" in run.context_error
+    assert fake.generate_calls == tasks.MAX_CONTEXT_RETRIES + 1
+
+
+def test_context_model_only_falls_back_when_the_model_is_known_to_be_missing(settings):
+    from common.ollama import OllamaUnavailable
+    from rag.tasks import context_model
+
+    settings.CHUNK_CONTEXT_MODEL, settings.LLM_MODEL = "small", "big"
+
+    class Has:
+        def has_model(self, model):
+            return True
+
+    class Missing:
+        def has_model(self, model):
+            return False
+
+    class CannotTell:
+        def has_model(self, model):
+            raise OllamaUnavailable("tags timed out")
+
+    assert context_model(Has()) == "small"
+    assert context_model(Missing()) == "big"
+    # A transient check failure must not silently switch the whole document
+    # to the big model (and a different cache key); let the task retry.
+    with pytest.raises(OllamaUnavailable):
+        context_model(CannotTell())
+
+
+@pytest.mark.django_db
+def test_stage_2_does_not_load_chunk_embeddings_it_never_reads(indexed, monkeypatch):
+    from django.db import connection
+    from django.test.utils import CaptureQueriesContext
+
+    from rag.tasks import queue_contextualize
+
+    monkeypatch.setattr("rag.tasks.get_client", lambda: _FakeOllama())
+    with CaptureQueriesContext(connection) as ctx:
+        queue_contextualize(str(indexed.id))
+    selects = [q["sql"] for q in ctx.captured_queries
+               if q["sql"].startswith("SELECT") and '"rag_chunk"."text"' in q["sql"]]
+    assert selects, "expected the chunk load query"
+    assert all('"rag_chunk"."embedding"' not in sql for sql in selects)

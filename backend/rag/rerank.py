@@ -98,11 +98,9 @@ def rerank(
 ) -> list[dict]:
     """Reorder `hits` (in RRF order) by reranker score and return the top_k.
 
-    Each returned hit keeps its fused score as `rrf`; scored hits get the
-    reranker probability as `score` and `rerank_score`.
+    hybrid_search has already copied each hit's fused score to `rrf`; scored
+    hits get the reranker probability as `score` and `rerank_score`.
     """
-    for hit in hits:
-        hit.setdefault("rrf", hit.get("score"))
     if not hits:
         return []
     model = model or settings.RERANK_MODEL

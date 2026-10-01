@@ -176,3 +176,14 @@ def test_exact_matches_come_first_and_unrelated_documents_are_not_listed(make_do
     result = _list(allowed_doc_ids=ids, query="lease terms", limit=10)
     assert str(minutes.id) not in [r["document_id"] for r in result]
     assert {r["document_id"] for r in result} == {str(d.id) for d in leases}
+
+
+@pytest.mark.django_db
+def test_list_documents_with_an_empty_scope_does_not_embed_the_query(monkeypatch):
+    class NeverCalled:
+        def embed(self, texts):
+            pytest.fail("embedded a query for an empty scope")
+
+    monkeypatch.setattr("chat.tools.get_client", lambda: NeverCalled())
+    assert _list(allowed_doc_ids=[], query="lease") == []
+    assert _list(allowed_doc_ids=None, query="lease") == []
