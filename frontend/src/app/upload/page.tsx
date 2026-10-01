@@ -4,8 +4,8 @@ import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useQueryClient } from "@tanstack/react-query";
 import {
-  AlertCircle, CloudUpload, FileImage, FileSearch, FileText, Loader2, MessagesSquare,
-  ScanText, Sparkles, X,
+  AlertCircle, CheckCircle2, CloudUpload, FileImage, FileSearch, FileText, Loader2,
+  MessagesSquare, Plus, ScanText, Sparkles, X,
 } from "lucide-react";
 import { uploadDocument } from "@/lib/api";
 import { bytes } from "@/lib/format";
@@ -20,6 +20,9 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
 const MAX_MB = 50;
+// Each file is its own POST to /api/documents/, so the per-file limits and
+// validation stay exactly what the backend enforces; this only caps the batch.
+const MAX_FILES = 5;
 const ACCEPT = ".pdf,image/*";
 
 const STEPS: { icon: typeof ScanText; title: StringKey; hint: StringKey }[] = [
@@ -29,52 +32,119 @@ const STEPS: { icon: typeof ScanText; title: StringKey; hint: StringKey }[] = [
   { icon: MessagesSquare, title: "stepChat", hint: "stepChatHint" },
 ];
 
+type Status = "waiting" | "uploading" | "done" | "failed";
+
+type Item = {
+  key: string;
+  file: File;
+  status: Status;
+  error?: string;
+  documentId?: string;
+};
+
 function isSupported(file: File) {
   return file.type === "application/pdf" || file.type.startsWith("image/")
     || /\.(pdf|png|jpe?g|tiff?|webp|bmp)$/i.test(file.name);
 }
+
+let nextKey = 0;
 
 export default function UploadPage() {
   const { t } = useLocale();
   const router = useRouter();
   const queryClient = useQueryClient();
   const inputRef = useRef<HTMLInputElement>(null);
-  const [file, setFile] = useState<File | null>(null);
+  const [items, setItems] = useState<Item[]>([]);
   const [title, setTitle] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
 
-  function choose(next: File | undefined) {
+  const pending = items.filter((item) => item.status !== "done");
+  const failed = items.filter((item) => item.status === "failed");
+  const single = items.length === 1;
+
+  function choose(list: FileList | File[] | null | undefined) {
     setError(null);
-    if (!next) return;
-    if (!isSupported(next)) return setError(t("unsupportedFile"));
-    if (next.size > MAX_MB * 1024 * 1024) return setError(fmt(t("fileTooLarge"), { size: MAX_MB }));
-    setFile(next);
+    const picked = Array.from(list ?? []);
+    if (!picked.length) return;
+
+    const accepted: File[] = [];
+    for (const file of picked) {
+      if (!isSupported(file)) {
+        setError(`${file.name}: ${t("unsupportedFile")}`);
+        continue;
+      }
+      if (file.size > MAX_MB * 1024 * 1024) {
+        setError(`${file.name}: ${fmt(t("fileTooLarge"), { size: MAX_MB })}`);
+        continue;
+      }
+      accepted.push(file);
+    }
+
+    const room = MAX_FILES - items.length;
+    if (accepted.length > room) setError(fmt(t("tooManyFiles"), { max: MAX_FILES }));
+    const added = accepted.slice(0, Math.max(0, room)).map((file) => ({
+      key: `${file.name}-${nextKey++}`, file, status: "waiting" as Status,
+    }));
+    if (added.length) setItems((current) => [...current, ...added]);
+  }
+
+  function remove(key: string) {
+    setItems((current) => current.filter((item) => item.key !== key));
+    if (items.length <= 1) setTitle("");
+  }
+
+  function update(key: string, patch: Partial<Item>) {
+    setItems((current) => current.map((item) => (item.key === key ? { ...item, ...patch } : item)));
   }
 
   async function send() {
-    if (!file) return;
+    const queue = items.filter((item) => item.status === "waiting" || item.status === "failed");
+    if (!queue.length) return;
     setBusy(true);
     setError(null);
-    try {
-      const doc = await uploadDocument(file, title.trim() || undefined);
-      void queryClient.invalidateQueries({ queryKey: ["documents"] });
-      router.push(`/documents/${doc.id}`);
-    } catch (e) {
-      setError(`${t("uploadFailed")}: ${e instanceof Error ? e.message : String(e)}`);
-      setBusy(false);
+
+    // One request per file, in order: a failure leaves that file marked and
+    // the rest still go through.
+    let uploaded = 0;
+    let lastDocumentId: string | undefined;
+    for (const item of queue) {
+      update(item.key, { status: "uploading", error: undefined });
+      try {
+        const doc = await uploadDocument(item.file, single ? title.trim() || undefined : undefined);
+        update(item.key, { status: "done", documentId: doc.id });
+        uploaded += 1;
+        lastDocumentId = doc.id;
+      } catch (e) {
+        update(item.key, { status: "failed", error: e instanceof Error ? e.message : String(e) });
+      }
     }
+
+    if (uploaded) void queryClient.invalidateQueries({ queryKey: ["documents"] });
+    const failures = queue.length - uploaded;
+    if (failures) {
+      setError(fmt(t("someUploadsFailed"), { n: failures }));
+      setBusy(false);
+      return;
+    }
+    // A single file keeps the original flow: straight to its review page.
+    router.push(single && lastDocumentId ? `/documents/${lastDocumentId}` : "/");
   }
 
-  const FileIcon = file?.type.startsWith("image/") ? FileImage : FileText;
+  const doneCount = items.filter((item) => item.status === "done").length;
+  const buttonLabel = busy
+    ? fmt(t("uploadProgress"), { done: doneCount + 1, total: items.length })
+    : single
+      ? t("uploadAndContinue")
+      : fmt(t("uploadAll"), { n: pending.length });
 
   return (
     <Page className="max-w-3xl">
-      <PageHeader title={t("uploadTitle")} description={fmt(t("uploadSubtitle"), { size: MAX_MB })} />
+      <PageHeader title={t("uploadTitle")} description={fmt(t("uploadSubtitle"), { max: MAX_FILES, size: MAX_MB })} />
 
       <Card className="p-2">
-        {!file ? (
+        {items.length === 0 ? (
           <div
             role="button"
             tabIndex={0}
@@ -90,7 +160,7 @@ export default function UploadPage() {
             onDrop={(event) => {
               event.preventDefault();
               setDragging(false);
-              choose(event.dataTransfer.files?.[0]);
+              choose(event.dataTransfer.files);
             }}
             className={cn(
               "flex cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed px-6 py-16 text-center transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
@@ -107,42 +177,101 @@ export default function UploadPage() {
             </Button>
           </div>
         ) : (
-          <div className="space-y-5 p-4">
-            <div className="flex items-center gap-3 rounded-lg border bg-muted/40 p-3">
-              <span className="grid size-10 shrink-0 place-items-center rounded-lg bg-background text-muted-foreground">
-                <FileIcon className="size-5" />
-              </span>
-              <div className="min-w-0 flex-1">
-                <p className="truncate text-sm font-medium" dir="auto">{file.name}</p>
-                <p className="text-xs text-muted-foreground">{bytes(file.size)}</p>
-              </div>
+          <div
+            className="space-y-5 p-4"
+            onDragOver={(event) => { event.preventDefault(); setDragging(true); }}
+            onDragLeave={() => setDragging(false)}
+            onDrop={(event) => {
+              event.preventDefault();
+              setDragging(false);
+              if (!busy) choose(event.dataTransfer.files);
+            }}
+          >
+            <ul className="space-y-2" aria-label={t("uploadTitle")}>
+              {items.map((item) => {
+                const FileIcon = item.file.type.startsWith("image/") ? FileImage : FileText;
+                return (
+                  <li
+                    key={item.key}
+                    className={cn(
+                      "flex items-center gap-3 rounded-lg border p-3",
+                      item.status === "failed" ? "border-destructive/40 bg-destructive/5" : "bg-muted/40",
+                    )}
+                  >
+                    <span className="grid size-10 shrink-0 place-items-center rounded-lg bg-background text-muted-foreground">
+                      <FileIcon className="size-5" />
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-medium" dir="auto">{item.file.name}</p>
+                      <p className="text-xs text-muted-foreground">
+                        {bytes(item.file.size)}
+                        {items.length > 1 && (
+                          <>
+                            {" · "}
+                            <span className={cn(item.status === "failed" && "text-destructive")}>
+                              {item.status === "waiting" && t("fileWaiting")}
+                              {item.status === "uploading" && t("uploading")}
+                              {item.status === "done" && t("fileUploaded")}
+                              {item.status === "failed" && `${t("fileFailed")}: ${item.error}`}
+                            </span>
+                          </>
+                        )}
+                      </p>
+                    </div>
+                    {item.status === "uploading" && <Loader2 className="size-4 shrink-0 animate-spin text-muted-foreground" />}
+                    {item.status === "done" && <CheckCircle2 className="size-4 shrink-0 text-primary" />}
+                    {(item.status === "waiting" || item.status === "failed") && (
+                      <Button
+                        variant="ghost"
+                        size="icon-sm"
+                        onClick={() => remove(item.key)}
+                        disabled={busy}
+                        aria-label={t("removeFile")}
+                      >
+                        <X />
+                      </Button>
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
+
+            {items.length < MAX_FILES && (
               <Button
-                variant="ghost"
-                size="icon-sm"
-                onClick={() => { setFile(null); setTitle(""); }}
+                variant="outline"
+                size="sm"
+                onClick={() => inputRef.current?.click()}
                 disabled={busy}
-                aria-label={t("removeFile")}
+                className={cn("w-full border-dashed", dragging && "border-primary bg-primary/5")}
               >
-                <X />
+                <Plus />
+                {t("addMoreFiles")}
               </Button>
-            </div>
+            )}
 
-            <div className="space-y-2">
-              <Label htmlFor="title">{t("titleOptional")}</Label>
-              <Input
-                id="title"
-                dir="auto"
-                value={title}
-                onChange={(event) => setTitle(event.target.value)}
-                placeholder={t("titlePlaceholder")}
-                disabled={busy}
-              />
-            </div>
+            {single && (
+              <div className="space-y-2">
+                <Label htmlFor="title">{t("titleOptional")}</Label>
+                <Input
+                  id="title"
+                  dir="auto"
+                  value={title}
+                  onChange={(event) => setTitle(event.target.value)}
+                  placeholder={t("titlePlaceholder")}
+                  disabled={busy}
+                />
+              </div>
+            )}
 
-            <div className="flex justify-end">
-              <Button onClick={() => void send()} disabled={busy}>
+            <div className="flex justify-end gap-2">
+              {doneCount > 0 && !busy && (
+                <Button variant="outline" onClick={() => router.push("/")}>
+                  {t("openLibrary")}
+                </Button>
+              )}
+              <Button onClick={() => void send()} disabled={busy || pending.length === 0}>
                 {busy && <Loader2 className="animate-spin" />}
-                {busy ? t("uploading") : t("uploadAndContinue")}
+                {buttonLabel}
               </Button>
             </div>
           </div>
@@ -153,9 +282,10 @@ export default function UploadPage() {
         ref={inputRef}
         type="file"
         accept={ACCEPT}
+        multiple
         hidden
         onChange={(event) => {
-          choose(event.target.files?.[0]);
+          choose(event.target.files);
           event.target.value = "";
         }}
       />
@@ -165,6 +295,10 @@ export default function UploadPage() {
           <AlertCircle />
           <AlertDescription>{error}</AlertDescription>
         </Alert>
+      )}
+
+      {failed.length > 0 && !busy && (
+        <p className="sr-only" role="status">{fmt(t("someUploadsFailed"), { n: failed.length })}</p>
       )}
 
       <section className="mt-10">

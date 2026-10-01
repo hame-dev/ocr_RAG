@@ -78,3 +78,6 @@ Thumbs.db
 .vscode/*
 !.vscode/settings.json
 !.vscode/extensions.json
+
+# Playwright MCP snapshots, console logs and test uploads
+.playwright-mcp/
