@@ -85,7 +85,7 @@ The interface defaults to English and switches to Arabic with full RTL layout; t
 - [Ollama](https://ollama.com) running on the host
 - ~19 GB for models: `qwen3.5:9b` (6.6 GB), `fredrezones55/chandra-ocr-2` (5.8 GB),
   `qwen3.5:4b` (3.4 GB, background chunk context), `bge-m3` (1.2 GB),
-  `surya-ocr-2` (609 MB), `dengcao/Qwen3-Reranker-0.6B` (search reranker)
+  `surya-ocr-2` (609 MB), `dengcao/Qwen3-Reranker-0.6B:Q8_0` (search reranker)
 
 ```bash
 cp .env.example .env

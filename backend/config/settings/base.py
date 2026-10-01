@@ -195,7 +195,7 @@ LLM_NUM_CTX = int(os.environ.get("LLM_NUM_CTX", "16384"))
 # Ollama reorders them. Any failure or the deadline falls back to RRF order.
 # Parallel workers only help when the host runs OLLAMA_NUM_PARALLEL >= workers.
 RERANK_ENABLED = _env_bool("RERANK_ENABLED", True)
-RERANK_MODEL = os.environ.get("RERANK_MODEL", "dengcao/Qwen3-Reranker-0.6B")
+RERANK_MODEL = os.environ.get("RERANK_MODEL", "dengcao/Qwen3-Reranker-0.6B:Q8_0")
 RERANK_CANDIDATES = int(os.environ.get("RERANK_CANDIDATES", "20"))
 RERANK_WORKERS = int(os.environ.get("RERANK_WORKERS", "4"))
 RERANK_TIMEOUT_S = float(os.environ.get("RERANK_TIMEOUT_S", "8"))

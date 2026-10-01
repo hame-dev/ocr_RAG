@@ -13,7 +13,7 @@ REQUIRED=(
   "bge-m3"                        # embeddings — multilingual, 1024-dim
   "fredrezones55/chandra-ocr-2:latest" # default layout-aware OCR
   "melashri/surya-ocr-2:q4_k_m"   # layout-aware OCR, 609MB
-  "${RERANK_MODEL:-dengcao/Qwen3-Reranker-0.6B}"  # search reranker (RERANK_MODEL)
+  "${RERANK_MODEL:-dengcao/Qwen3-Reranker-0.6B:Q8_0}"  # search reranker (RERANK_MODEL)
   "${CHUNK_CONTEXT_MODEL:-qwen3.5:4b}"            # background chunk context (CHUNK_CONTEXT_MODEL)
 )
 

@@ -158,7 +158,7 @@ CREATE INDEX IF NOT EXISTS chunk_tsv ON rag_chunk USING gin (tsv);
 | Setting | Default | Meaning |
 |---|---|---|
 | `RERANK_ENABLED` | `1` | Rerank hybrid candidates (off in the test settings) |
-| `RERANK_MODEL` | `dengcao/Qwen3-Reranker-0.6B` | Ollama model used for scoring |
+| `RERANK_MODEL` | `dengcao/Qwen3-Reranker-0.6B:Q8_0` | Ollama model used for scoring |
 | `RERANK_CANDIDATES` | `20` | Fused rows fetched before reranking (deep research uses 12) |
 | `RERANK_WORKERS` | `4` | Parallel scoring threads (only helps if the host runs `OLLAMA_NUM_PARALLEL>=4`) |
 | `RERANK_TIMEOUT_S` | `8` | Overall deadline per search; unscored candidates keep RRF order |
