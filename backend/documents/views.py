@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import hashlib
 import logging
-import mimetypes
 import os
 
 from django.conf import settings
@@ -68,41 +66,16 @@ class DocumentViewSet(viewsets.ModelViewSet):
             )
         serializer = UploadSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        upload = serializer.validated_data["file"]
+        data = serializer.validated_data
 
-        document = Document.objects.create(
-            owner=request.user,
-            title=serializer.validated_data.get("title", ""),
-            original_filename=upload.name[:512],
-            mime_type=upload.sniffed_mime,
-            size_bytes=upload.size,
-            metadata_mode=serializer.validated_data.get("metadata_mode", "auto"),
-            required_fields=serializer.validated_data.get("required_fields", []),
-            storage_path="",
-        )
+        from documents.services.ingest import create_document
 
-        target_dir = os.path.join(settings.MEDIA_ROOT, "docs", str(document.id))
-        os.makedirs(target_dir, exist_ok=True)
-        # From the sniffed type, not the client's filename.
-        extension = mimetypes.guess_extension(upload.sniffed_mime) or ".bin"
-        target_path = os.path.join(target_dir, f"original{extension}")
-
-        digest = hashlib.sha256()
-        with open(target_path, "wb") as fh:
-            for chunk in upload.chunks():
-                digest.update(chunk)
-                fh.write(chunk)
-
-        document.storage_path = target_path
-        document.sha256 = digest.hexdigest()
-        document.save(update_fields=["storage_path", "sha256", "updated_at"])
-
-        # Preprocessing (page count, digital-text detection) runs immediately so
-        # the UI can show page thumbnails and recommend engines right away.
-        from ocr.tasks import preprocess_document
-
-        transaction.on_commit(
-            lambda: preprocess_document.delay(str(document.id), ["neural"])
+        document = create_document(
+            request.user,
+            data["file"],
+            title=data.get("title", ""),
+            metadata_mode=data.get("metadata_mode", "auto"),
+            required_fields=data.get("required_fields", []),
         )
 
         return Response(

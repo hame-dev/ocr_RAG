@@ -10,6 +10,7 @@ from rest_framework.response import Response
 
 from common.ownership import get_owned_document
 from ocr.engines import registry
+from ocr.ranking import rank_key as _rank_key
 from ocr.models import OCRBatch, OCRPageResult, OCRRun
 from ocr.serializers import (
     OCRBatchSerializer,
@@ -115,18 +116,6 @@ class OCRBatchViewSet(viewsets.ReadOnlyModelViewSet):
                 "pages": pages,
             }
         )
-
-
-def _rank_key(run: OCRRun) -> float:
-    """Rank engine outputs for the comparison grid.
-
-    Confidence is not comparable across engines and several report none at all,
-    so the model-free gibberish signal carries most of the weight.
-    """
-    confidence = run.mean_confidence if run.mean_confidence is not None else 0.5
-    gibberish = run.gibberish_score if run.gibberish_score is not None else 0.5
-    penalty = 0.3 if "suspected_summarization" in (run.warnings or []) else 0.0
-    return 0.35 * confidence + 0.65 * (1.0 - gibberish) - penalty
 
 
 class OCRRunViewSet(viewsets.ReadOnlyModelViewSet):

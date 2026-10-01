@@ -109,6 +109,7 @@ make fixtures  # generate the bilingual test PDFs
 make test      # backend test suite
 make test-runner  # code-execution sandbox tests, run inside its own image
 SMOKE_USERNAME=alice SMOKE_PASSWORD=... make smoke   # full live pipeline, ~1–2 min
+make ingest D=~/scans U=alice ARGS="--recursive"     # dev only: run the whole pipeline on a folder of PDFs/images
 ```
 
 **Upgrading from a version without login?** Existing documents and chats have no
