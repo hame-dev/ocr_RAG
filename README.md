@@ -14,14 +14,19 @@ so it gets the GPU; everything else is a container.
 
 ## What it does
 
-**Compare OCR engines instead of trusting one.** Ten engines are registered —
-classical (Tesseract), layout-aware neural (Surya OCR 2, Chandra OCR 2), and
-vision LLMs (Qwen 3.5 Vision, Qwen3-VL, DeepSeek-OCR, GLM-OCR, Qari). Pick one or
+**Compare OCR engines instead of trusting one.** Eleven engines are registered —
+the PDF's own text layer, classical (Tesseract, EasyOCR), layout-aware neural
+(Surya OCR 2, Chandra OCR 2 locally or on Ollama), and vision LLMs (Qwen 3.5
+Vision, Qwen3-VL, DeepSeek-OCR, GLM-OCR, Qari). Pick one or
 several; the app shows per-engine timing, character counts, confidence and a
 page-by-page agreement score, so you choose a baseline on evidence.
 
 Engines that aren't available are greyed out **with the reason** — model not
 pulled, binary not on PATH, sidecar unreachable — and the exact command to fix it.
+
+**Upload in batches.** Drop up to five PDFs or images at once (50 MB and 300
+pages each by default, set by `MAX_UPLOAD_MB` / `MAX_UPLOAD_PAGES`); each becomes
+its own document.
 
 **Edit without losing the original.** Raw OCR output is immutable. Every edit
 creates a new revision with a parent pointer, so you can always get back to what
@@ -38,6 +43,18 @@ and typed custom fields against a closed schema.
 **Chat with citations.** A LangGraph agent searches your library with hybrid
 retrieval and streams answers over SSE. Every claim carries a citation resolving
 to a specific document and page. It can render diagrams from what it finds.
+
+**Retrieval that knows what each chunk is about.** Chunks follow page and
+section boundaries, and each one stores its own keywords (YAKE) and a short
+header with the document title, a summary and its section. Those keywords and
+headers are embedded and weighted into full-text search along with the text. In
+the background, a small LLM (`qwen3.5:4b`) writes a summary for each section and
+updates the chunks in place, so citations keep working. Search combines vector
+and keyword results, then the same model reranks the candidates by judging
+whether each one answers the query. If the reranker fails or times out, the
+original order is kept. You can also ask "which documents are about X" and get a
+ranking of whole documents. A `rag-eval` command measures recall and MRR against
+your own queries. Details are under [Retrieval](#retrieval).
 
 ![Agent answering with a generated diagram and page-level citations](assets/conversation_screen.png)
 
@@ -143,10 +160,10 @@ Browser ──SSE──> Django (ASGI/uvicorn) ──> Postgres 17 + pgvector
    │                  ├──> Redis ──> Celery (queues: ocr_cpu, llm=1 then llm_bg, index)
    │                  ├──> code-runner (internal network only; General mode's run_python)
    │                  └──> host.docker.internal:11434 ──> Ollama (Metal GPU)
-   └──> Next.js 15                                          qwen3.5:9b, bge-m3, surya-ocr-2
+   └──> Next.js 15                         qwen3.5:9b, qwen3.5:4b, bge-m3, chandra-ocr-2, surya-ocr-2
 ```
 
-Backend is 7 Django apps and 40+ endpoints; frontend is Next.js 15 with Tailwind, shadcn/ui (Radix) components and lucide icons, RTL-aware throughout.
+Backend is 8 Django apps and 40+ endpoints; frontend is Next.js 15 with Tailwind, shadcn/ui (Radix) components and lucide icons, RTL-aware throughout.
 
 ### Authentication
 
@@ -319,9 +336,10 @@ token streaming, citation resolution and transcript persistence.
 
 Not built yet:
 
-- **EasyOCR / PaddleOCR sidecars.** The compose services and client adapters
-  exist; the `server.py` files in `docker/ocr-easyocr/` and `docker/ocr-paddle/`
-  do not.
+- **EasyOCR / PaddleOCR sidecars.** Only the compose services and the EasyOCR
+  client adapter exist. `docker/ocr-easyocr/` is empty, `docker/ocr-paddle/` and
+  a Paddle adapter don't exist, so the `easyocr`, `paddle` and `all-engines`
+  profiles don't build yet.
 - **Page image viewer with bbox overlay.** Tesseract returns the boxes and the
   API serves them; nothing renders them.
 - **Diff view.** `grapheme_opcodes` and the endpoint exist; no UI.
