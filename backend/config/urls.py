@@ -13,6 +13,7 @@ from documents import views as doc_views
 from enrichment import views as enrich_views
 from ocr import views as ocr_views
 from rag import views as rag_views
+from sheets import views as sheet_views
 
 router = DefaultRouter()
 router.register(r"documents", doc_views.DocumentViewSet, basename="document")
@@ -53,6 +54,12 @@ urlpatterns = [
     path("api/documents/<uuid:document_id>/enrich/", enrich_views.enrich),
     path("api/documents/<uuid:document_id>/metadata/", enrich_views.metadata),
     path("api/metadata/schema/", enrich_views.metadata_schema),
+
+    # --- Spreadsheets: the Columns step ------------------------------------
+    path("api/documents/<uuid:document_id>/sheets/", sheet_views.sheet_list),
+    path("api/documents/<uuid:document_id>/sheets/preview/", sheet_views.sheet_preview),
+    path("api/documents/<uuid:document_id>/sheets/reprofile/", sheet_views.sheet_reprofile),
+    path("api/documents/<uuid:document_id>/sheets/confirm/", sheet_views.sheet_confirm),
 
     # --- RAG ----------------------------------------------------------------
     path("api/documents/<uuid:document_id>/index/", rag_views.index_document_view),

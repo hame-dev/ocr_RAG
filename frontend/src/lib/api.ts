@@ -125,6 +125,8 @@ export interface DocumentSummary {
   detected_languages: string[];
   doc_type: string;
   summary_short: string;
+  /** .xlsx / .csv: no OCR; columns are reviewed instead. */
+  is_spreadsheet: boolean;
   created_at: string;
 }
 
@@ -203,6 +205,9 @@ export interface Citation {
   page_start: number | null;
   page_end: number | null;
   quote: string;
+  /** Set for a spreadsheet row: shown as "<sheet> · Row <n>" instead of a page. */
+  sheet?: string;
+  row?: number;
 }
 
 export type ResearchMode = "fast" | "balanced" | "deep";
@@ -231,9 +236,12 @@ export interface GeneratedFile {
   url: string;
 }
 
-/** One run_python call: the code, what it printed, and the files it saved. */
+/**
+ * One run_python call (the code, what it printed, the files it saved), or one
+ * query_spreadsheet call (the SQL as `code`, the result table as `stdout`).
+ */
 export interface CodeRun {
-  name: "run_python";
+  name: "run_python" | "query_spreadsheet";
   code: string;
   ok: boolean;
   stdout: string;
@@ -490,3 +498,99 @@ export const attachmentPreviewUrl = (attachment: ChatAttachment) =>
   attachment.preview_url ? `${API_BASE}${attachment.preview_url}` : null;
 
 export const generatedFileUrl = (file: GeneratedFile) => `${API_BASE}${file.url}`;
+
+// ---- Spreadsheets: the Columns step -----------------------------------------
+
+export type ColumnType =
+  | "text" | "integer" | "number" | "date" | "boolean" | "category" | "id" | "email" | "phone";
+export type ColumnRole = "identifier" | "title" | "attribute" | "ignore";
+
+export const COLUMN_TYPES: ColumnType[] = [
+  "text", "integer", "number", "date", "boolean", "category", "id", "email", "phone",
+];
+export const COLUMN_ROLES: ColumnRole[] = ["identifier", "title", "attribute", "ignore"];
+
+export interface ColumnProfile {
+  header: string;
+  type: ColumnType;
+  null_ratio: number;
+  distinct: number;
+  samples: string[];
+  options?: string[];
+  min?: number | string;
+  max?: number | string;
+  mean?: number;
+  fill_down_suggested: boolean;
+}
+
+export interface SchemaColumn {
+  source: string;
+  key: string;
+  label: string;
+  type: ColumnType;
+  role: ColumnRole;
+  description: string;
+  fill_down: boolean;
+}
+
+export interface SchemaCombine {
+  key: string;
+  label: string;
+  from: string[];
+  sep: string;
+}
+
+export interface SheetSchema {
+  entity: string;
+  entity_ar: string;
+  description: string;
+  title_template: string;
+  columns: SchemaColumn[];
+  combine: SchemaCombine[];
+}
+
+export interface SheetCard {
+  row: number;
+  text: string;
+}
+
+export interface SheetInfo {
+  index: number;
+  name: string;
+  table_name: string;
+  header_row: number | null;
+  header_rows: number;
+  row_count: number;
+  col_count: number;
+  profile: ColumnProfile[];
+  /** Empty ({}) until proposed / confirmed. */
+  proposed_schema: Partial<SheetSchema>;
+  schema: Partial<SheetSchema>;
+  schema_status: "pending" | "proposing" | "proposed" | "confirmed";
+  schema_source: "" | "llm" | "heuristic";
+  proposal_error: string;
+  confirmed_at: string | null;
+  first_rows: { row: number; values: (string | number | boolean | null)[] }[];
+  preview: SheetCard[];
+}
+
+export const getSheets = (documentId: string) =>
+  api<{ status: DocStatus; sheets: SheetInfo[] }>(`/api/documents/${documentId}/sheets/`);
+
+export const previewSheet = (documentId: string, sheet: number, schema: SheetSchema) =>
+  api<{ schema: SheetSchema; preview: SheetCard[] }>(`/api/documents/${documentId}/sheets/preview/`, {
+    method: "POST",
+    body: JSON.stringify({ sheet, schema }),
+  });
+
+export const reprofileSheet = (documentId: string, sheet: number, headerRow: number | null) =>
+  api<SheetInfo>(`/api/documents/${documentId}/sheets/reprofile/`, {
+    method: "POST",
+    body: JSON.stringify({ sheet, header_row: headerRow }),
+  });
+
+export const confirmSheets = (documentId: string, sheets: { index: number; schema: SheetSchema }[]) =>
+  api<{ status: DocStatus; sheets: SheetInfo[] }>(`/api/documents/${documentId}/sheets/confirm/`, {
+    method: "POST",
+    body: JSON.stringify({ sheets }),
+  });

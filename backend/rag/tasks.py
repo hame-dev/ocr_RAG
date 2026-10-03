@@ -17,6 +17,7 @@ from rag.context import build_context_header, build_context_text, embed_input
 from rag.contextualize import build_windows, merge_keywords, summarize_window, window_key, window_text
 from rag.keywords import extract_keywords, keywords_text
 from rag.models import Chunk, ChunkContext, DocumentVector, IndexRun
+from sheets.services.parse import SPREADSHEET_MIMES
 
 logger = logging.getLogger(__name__)
 
@@ -125,7 +126,13 @@ def index_document(document_id: str):
             pass
 
     try:
-        drafts = chunk_text(revision.text)
+        if document.is_spreadsheet:
+            from sheets.services.cards import sheet_drafts
+
+            # One chunk per row: a record is found, and cited, on its own.
+            drafts = sheet_drafts(document)
+        else:
+            drafts = chunk_text(revision.text)
         if not drafts:
             raise ValueError("chunking produced no chunks")
 
@@ -238,6 +245,10 @@ def queue_contextualize(document_id: str, index_run_id: int | None = None, *, fo
     --contextualize-only`).
     """
     if not (force or settings.CHUNK_CONTEXT_ENABLED):
+        return False
+    # A spreadsheet's chunks are single rows that already carry their sheet
+    # and column labels; a section summary per six rows adds nothing.
+    if Document.objects.filter(id=document_id, mime_type__in=SPREADSHEET_MIMES).exists():
         return False
     runs = IndexRun.objects.filter(document_id=document_id, status="succeeded")
     run = runs.filter(id=index_run_id).first() if index_run_id else runs.first()

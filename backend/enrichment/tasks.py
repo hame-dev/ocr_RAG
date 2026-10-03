@@ -29,6 +29,13 @@ def plan_extraction(document_id: str):
     if not revision or not revision.text.strip():
         return {"error": "no finalized text"}
 
+    if document.is_spreadsheet:
+        # Metadata comes from the confirmed column schema, not the extractor.
+        from sheets.services.pipeline import write_metadata
+
+        write_metadata(document, auto_index=auto_index)
+        return {"doc_type": "spreadsheet", "is_partial": False}
+
     plan_row, _ = ExtractionPlan.objects.get_or_create(document=document)
     plan_row.status = "running"
     plan_row.save(update_fields=["status"])

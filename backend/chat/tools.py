@@ -216,6 +216,13 @@ async def read_document_page(
         ).first()
         if not document or not document.current_revision:
             return f"no finalized text for document {document_id}"
+        if document.is_spreadsheet:
+            # A "page" is a whole sheet, possibly thousands of rows.
+            return (
+                f"{document.display_title} is a spreadsheet; page {page_number} is a whole sheet. "
+                "Use describe_spreadsheet and query_spreadsheet to read or compute over its rows, "
+                "or search_documents to find a record."
+            )
         pages = document.current_revision.pages
         if page_number < 1 or page_number > len(pages):
             return f"document has {len(pages)} pages; {page_number} is out of range"
@@ -269,10 +276,13 @@ def _document_is_allowed(
     }
 
 
+from chat.sheet_tools import SHEET_TOOLS  # noqa: E402  (they import this module lazily)
+
 TOOLS = [
     search_documents,
     get_document_metadata,
     list_documents,
     read_document_page,
     get_chunk_context,
+    *SHEET_TOOLS,
 ]

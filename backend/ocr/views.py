@@ -146,6 +146,11 @@ class OCRRunViewSet(viewsets.ReadOnlyModelViewSet):
 def start_ocr(request, document_id):
     """Kick off a multi-engine OCR batch."""
     document = get_owned_document(request.user, document_id)
+    if document.is_spreadsheet:
+        return Response(
+            {"detail": "spreadsheets are read directly, not by OCR; confirm their columns instead"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
 
     serializer = StartOCRSerializer(data=request.data)
     serializer.is_valid(raise_exception=True)

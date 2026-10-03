@@ -23,7 +23,8 @@ const MAX_MB = 50;
 // Each file is its own POST to /api/documents/, so the per-file limits and
 // validation stay exactly what the backend enforces; this only caps the batch.
 const MAX_FILES = 5;
-const ACCEPT = ".pdf,image/*";
+const ACCEPT = ".pdf,image/*,.xlsx,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv";
+const SHEET = /\.(xlsx|csv)$/i;
 
 const STEPS: { icon: typeof ScanText; title: StringKey; hint: StringKey }[] = [
   { icon: ScanText, title: "stepExtract", hint: "stepExtractHint" },
@@ -44,7 +45,7 @@ type Item = {
 
 function isSupported(file: File) {
   return file.type === "application/pdf" || file.type.startsWith("image/")
-    || /\.(pdf|png|jpe?g|tiff?|webp|bmp)$/i.test(file.name);
+    || /\.(pdf|png|jpe?g|tiff?|webp|bmp|xlsx|csv)$/i.test(file.name);
 }
 
 let nextKey = 0;

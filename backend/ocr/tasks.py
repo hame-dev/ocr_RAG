@@ -71,9 +71,16 @@ def preprocess_document(document_id: str, profiles: list[str] | None = None,
         fsm.transition_to(document, fsm.PREPROCESSING)
 
     try:
-        preprocess.analyze(document)
-        for profile_name in profiles or ["neural"]:
-            preprocess.rasterize(document, profile_name)
+        if document.is_spreadsheet:
+            # Nothing to rasterize or OCR: read the sheets and profile their
+            # columns; the column schema is proposed next, on the llm queue.
+            from sheets.services.pipeline import analyze as analyze_sheets
+
+            analyze_sheets(document)
+        else:
+            preprocess.analyze(document)
+            for profile_name in profiles or ["neural"]:
+                preprocess.rasterize(document, profile_name)
     except Exception as exc:
         logger.exception("preprocessing failed for %s", document_id)
         document.error_code = "preprocess_failed"
@@ -92,6 +99,10 @@ def preprocess_document(document_id: str, profiles: list[str] | None = None,
 
     if document.status == fsm.PREPROCESSING:
         fsm.transition_to(document, fsm.PREPROCESSED)
+    if document.is_spreadsheet:
+        from sheets.tasks import propose_schema
+
+        propose_schema.delay(document_id)
     return {"document_id": document_id, "pages": document.page_count}
 
 

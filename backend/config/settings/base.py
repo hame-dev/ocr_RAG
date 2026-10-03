@@ -44,6 +44,7 @@ INSTALLED_APPS = [
     "enrichment",
     "rag",
     "chat",
+    "sheets",
 ]
 
 MIDDLEWARE = [
@@ -99,6 +100,17 @@ MAX_UPLOAD_BYTES = int(os.environ.get("MAX_UPLOAD_MB", "50")) * 1024 * 1024
 MAX_UPLOAD_PAGES = int(os.environ.get("MAX_UPLOAD_PAGES", "300"))
 # Per page, at the highest render DPI: about A2 at 300 dpi.
 MAX_PAGE_PIXELS = int(os.environ.get("MAX_PAGE_PIXELS", str(50_000_000)))
+
+# ---- Spreadsheets (.xlsx / .csv) ---------------------------------------------
+# Every row becomes an embedded chunk, so rows bound the indexing time.
+MAX_SHEET_ROWS = int(os.environ.get("MAX_SHEET_ROWS", "20000"))
+MAX_SHEET_COLS = int(os.environ.get("MAX_SHEET_COLS", "100"))
+# An .xlsx is a zip: a small upload can inflate to gigabytes in openpyxl.
+MAX_SHEET_UNCOMPRESSED_BYTES = int(os.environ.get("MAX_SHEET_UNCOMPRESSED_MB", "200")) * 1024 * 1024
+SHEET_PROPOSAL_TIMEOUT_S = float(os.environ.get("SHEET_PROPOSAL_TIMEOUT_S", "180"))
+# query_spreadsheet: per-query deadline and the most rows handed back.
+SHEET_QUERY_TIMEOUT_S = float(os.environ.get("SHEET_QUERY_TIMEOUT_S", "3"))
+SHEET_QUERY_MAX_ROWS = int(os.environ.get("SHEET_QUERY_MAX_ROWS", "200"))
 
 # ---- DRF --------------------------------------------------------------------
 REST_FRAMEWORK = {
@@ -171,6 +183,7 @@ CELERY_TASK_ROUTES = {
     "ocr.tasks.run_ocr_engine_llm": {"queue": "llm"},
     "correction.tasks.*": {"queue": "llm"},
     "enrichment.tasks.*": {"queue": "llm"},
+    "sheets.tasks.propose_schema": {"queue": "llm"},
     # Exact names beat the glob below in Celery's router.
     "rag.tasks.contextualize_document": {"queue": "llm_bg"},
     "rag.tasks.*": {"queue": "index"},

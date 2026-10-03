@@ -12,7 +12,7 @@ import {
   ApiError, createConversation, getDocument, getExtractionPlan, getMetadata, listEngines,
   retryDocument, selectRun, startOcr,
 } from "@/lib/api";
-import { pages as pagesLabel, relativeTime } from "@/lib/format";
+import { pages as pagesLabel, relativeTime, sheets as sheetsLabel } from "@/lib/format";
 import { useLocale } from "@/components/Providers";
 import { StatusBadge } from "@/components/StatusBadge";
 import { EmptyState, Page } from "@/components/app-shell/Page";
@@ -20,7 +20,8 @@ import { ChatStep } from "@/components/document/ChatStep";
 import { DetailsStep } from "@/components/document/DetailsStep";
 import { ExtractStep } from "@/components/document/ExtractStep";
 import { ReviewStep } from "@/components/document/ReviewStep";
-import { CHAT_READY, initialStep, Step, Stepper, stepProgress } from "@/components/document/Stepper";
+import { ColumnsStep } from "@/components/document/ColumnsStep";
+import { CHAT_READY, initialStep, SHEET_STEPS, Step, Stepper, stepProgress } from "@/components/document/Stepper";
 import { useDocumentStream } from "@/components/document/useDocumentStream";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -86,7 +87,7 @@ export default function DocumentPage() {
 
   // Open on the step that matches where the document is, once.
   useEffect(() => {
-    if (doc && step === null) setStep(initialStep(doc.status, doc.current_revision_no));
+    if (doc && step === null) setStep(initialStep(doc.status, doc.current_revision_no, doc.is_spreadsheet));
   }, [doc, step]);
 
   if (docQuery.isError) {
@@ -174,9 +175,12 @@ export default function DocumentPage() {
         <div className="min-w-0 flex-1">
           <h1 className="truncate text-2xl font-semibold tracking-tight" dir="auto">{doc.display_title}</h1>
           <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-            <StatusBadge status={status} />
+            <StatusBadge status={status} spreadsheet={doc.is_spreadsheet} />
             {doc.page_count != null && (
-              <span className="flex items-center gap-1"><Layers className="size-3.5" /> {pagesLabel(doc.page_count, t)}</span>
+              <span className="flex items-center gap-1">
+                <Layers className="size-3.5" />
+                {doc.is_spreadsheet ? sheetsLabel(doc.page_count, t) : pagesLabel(doc.page_count, t)}
+              </span>
             )}
             {doc.is_digital_pdf && <Badge variant="outline">{t("hasTextLayer")}</Badge>}
             <span>{relativeTime(doc.created_at, locale)}</span>
@@ -195,9 +199,11 @@ export default function DocumentPage() {
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
-              <DropdownMenuItem onSelect={() => setStep("extract")}>
-                <ScanText /> {t("runOcr")}
-              </DropdownMenuItem>
+              {!doc.is_spreadsheet && (
+                <DropdownMenuItem onSelect={() => setStep("extract")}>
+                  <ScanText /> {t("runOcr")}
+                </DropdownMenuItem>
+              )}
               <DropdownMenuItem onSelect={() => void retry()}>
                 <RotateCw /> {t("retryProcessing")}
               </DropdownMenuItem>
@@ -223,7 +229,10 @@ export default function DocumentPage() {
       )}
 
       <div className="mb-6 border-b pb-4">
-        <Stepper current={step} done={done} onSelect={setStep} />
+        <Stepper
+          current={step} done={done} onSelect={setStep}
+          steps={doc.is_spreadsheet ? SHEET_STEPS : undefined}
+        />
       </div>
 
       <div key={step} className="animate-fade-in">
@@ -239,6 +248,13 @@ export default function DocumentPage() {
             comparison={stream.comparison}
             onRun={runOcr}
             onUseResult={pickResult}
+          />
+        )}
+        {step === "columns" && (
+          <ColumnsStep
+            documentId={id}
+            status={status}
+            onConfirmed={() => setStep("details")}
           />
         )}
         {step === "review" && (

@@ -21,6 +21,11 @@ class StartCorrectionSerializer(serializers.Serializer):
 @api_view(["POST"])
 def start_correction(request, document_id):
     document = get_owned_document(request.user, document_id)
+    if document.is_spreadsheet:
+        return Response(
+            {"detail": "AI correction is for OCR text; edit a spreadsheet's columns instead"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
     if not document.current_revision:
         return Response(
             {"detail": "select or enter document text first"},

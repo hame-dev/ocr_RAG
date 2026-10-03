@@ -39,6 +39,10 @@ x-django-env: &django-env
   MAX_UPLOAD_MB: ${MAX_UPLOAD_MB:-50}
   MAX_UPLOAD_PAGES: ${MAX_UPLOAD_PAGES:-300}
   MAX_PAGE_PIXELS: ${MAX_PAGE_PIXELS:-50000000}
+  MAX_SHEET_ROWS: ${MAX_SHEET_ROWS:-20000}
+  MAX_SHEET_COLS: ${MAX_SHEET_COLS:-100}
+  SHEET_QUERY_TIMEOUT_S: ${SHEET_QUERY_TIMEOUT_S:-3}
+  SHEET_QUERY_MAX_ROWS: ${SHEET_QUERY_MAX_ROWS:-200}
   OCR_TASK_SOFT_TIME_LIMIT_S: ${OCR_TASK_SOFT_TIME_LIMIT_S:-3600}
   OCR_BATCH_STALE_S: ${OCR_BATCH_STALE_S:-21600}
   DEFAULT_USERNAME: ${DEFAULT_USERNAME:-NCST_system}
@@ -136,7 +140,7 @@ services:
       - --timeout-keep-alive
       - "75"
     ports:
-      - "8000:8000"
+      - "${BACKEND_HOST_PORT:-8000}:8000"
     # `sandbox` reaches the code runner; `default` is everything else.
     networks: [default, sandbox]
     depends_on:

@@ -1,7 +1,7 @@
 "use client";
 
 import { memo, useState } from "react";
-import { AlertCircle, ChevronDown, SquareTerminal } from "lucide-react";
+import { AlertCircle, ChevronDown, SquareTerminal, Table2 } from "lucide-react";
 import { CodeRun } from "@/lib/api";
 import { duration } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -9,12 +9,15 @@ import { useLocale } from "../Providers";
 
 /**
  * One General-mode code run, collapsed to "Ran code · 1s" like the thinking
- * disclosure; expands to the Python and what it printed.
+ * disclosure; expands to the Python and what it printed. A spreadsheet query
+ * (Documents mode) uses the same panel: the SQL and its result table.
  */
 export const CodeRunPanel = memo(function CodeRunPanel({ run }: { run: CodeRun }) {
   const { t } = useLocale();
   const [open, setOpen] = useState(false);
-  const Icon = run.ok ? SquareTerminal : AlertCircle;
+  const query = run.name === "query_spreadsheet";
+  const Icon = !run.ok ? AlertCircle : query ? Table2 : SquareTerminal;
+  const title = query ? (run.ok ? t("ranQuery") : t("ranQueryFailed")) : run.ok ? t("ranCode") : t("ranCodeFailed");
 
   return (
     <div className="text-sm">
@@ -28,7 +31,7 @@ export const CodeRunPanel = memo(function CodeRunPanel({ run }: { run: CodeRun }
         )}
       >
         <Icon className="size-4" />
-        <span className="font-medium">{run.ok ? t("ranCode") : t("ranCodeFailed")}</span>
+        <span className="font-medium">{title}</span>
         {run.duration_ms != null && (
           // ltr: "<" is a mirrored character and would read ">1s" in Arabic.
           <span className="tabular-nums text-xs" dir="ltr">
@@ -45,7 +48,7 @@ export const CodeRunPanel = memo(function CodeRunPanel({ run }: { run: CodeRun }
               <code>{run.code}</code>
             </pre>
             {run.stdout && (
-              <Output label={t("codeOutput")} text={run.stdout} />
+              <Output label={query ? t("queryResult") : t("codeOutput")} text={run.stdout} />
             )}
             {run.stderr && (
               <Output label={t("codeError")} text={run.stderr} error={!run.ok} />

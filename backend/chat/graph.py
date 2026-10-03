@@ -57,6 +57,14 @@ in the form [[cite:<chunk_id>]], using a chunk_id you actually received from a t
 - NEVER cite a chunk_id that a tool did not return to you.
 - If the documents do not contain the answer, say so plainly. Do not guess.
 - If OCR text looks garbled, say the source may be misread rather than inventing a reading.
+- Spreadsheets (doc_type "spreadsheet") hold one record per row. To find a person or record \
+by name, use search_documents; each hit is one row, cite it like any passage. For ANY count, \
+total, average, minimum, maximum, ranking, comparison or list of rows matching a condition, \
+call describe_spreadsheet, then query_spreadsheet with one SQLite SELECT; never compute these \
+from search results, which only ever show a few rows. Report the numbers the query returned \
+exactly. In SQL compare text with LOWER(...), retry once with LIKE '%...%' when a filter finds \
+nothing, group dates with strftime, guard divisions with NULLIF(x, 0), and do not \
+de-duplicate identifiers unless asked. Select _row to get rows you can cite.
 - Quote exact figures, dates and reference numbers verbatim; never round or reformat them.
 - When the user asks for a graph, diagram, flow, timeline or relationship map and the
 documents contain enough evidence, include a valid fenced ```mermaid diagram after a
@@ -162,6 +170,9 @@ SCOPE_SELECTED = (
 )
 
 CITE_RE = re.compile(r"\[\[cite:([0-9a-fA-F\-]{6,40})\]\]")
+# Anything else in marker form ("[[cite:_row]]", "[[cite:]]") is never a
+# citation; it is removed rather than shown to the user.
+STRAY_CITE_RE = re.compile(r"\s?\[\[cite:[^\]]*\]\]")
 THINK_RE = re.compile(r"<think>.*?</think>", re.S)
 
 
@@ -399,6 +410,9 @@ async def collect(state: AgentState) -> dict:
                 content = json.loads(content)
             except Exception:
                 continue
+        if isinstance(content, dict):
+            # query_spreadsheet: the result rows that can be cited.
+            content = content.get("hits")
         if isinstance(content, list):
             for hit in content:
                 if isinstance(hit, dict) and hit.get("chunk_id"):
@@ -488,7 +502,7 @@ def resolve_citations(text: str, retrieved: dict) -> tuple[str, list[dict], str]
             # rather than rendering a reference that goes nowhere.
             return f"[{numbering[chunk_id]}]" if chunk_id in numbering else ""
 
-        display = CITE_RE.sub(replace, text)
+        display = STRAY_CITE_RE.sub("", CITE_RE.sub(replace, text))
         citations = [
             _citation(retrieved[chunk_id], index + 1)
             for index, chunk_id in enumerate(ordered)
@@ -497,7 +511,7 @@ def resolve_citations(text: str, retrieved: dict) -> tuple[str, list[dict], str]
 
     # No usable markers. Present the retrieved passages as "sources consulted"
     # and label the mode honestly rather than implying precision we don't have.
-    display = CITE_RE.sub("", text).strip()
+    display = STRAY_CITE_RE.sub("", CITE_RE.sub("", text)).strip()
     citations = [
         _citation(hit, index + 1) for index, hit in enumerate(list(retrieved.values())[:5])
     ]
@@ -514,4 +528,6 @@ def _citation(hit: dict, number: int) -> dict:
         "page_end": hit.get("page_end"),
         "quote": (hit.get("text") or "")[:240],
         "score": hit.get("score"),
+        # A spreadsheet row, shown as "<sheet> · Row <n>" instead of a page.
+        **({"sheet": hit.get("sheet") or "", "row": hit["row"]} if hit.get("row") is not None else {}),
     }

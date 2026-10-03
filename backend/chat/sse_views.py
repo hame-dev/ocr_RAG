@@ -379,6 +379,14 @@ async def _start_turn(user, conversation, content, research_mode, chat_mode,
                         {"name": tool_name, "phase": phase, "args": _safe(args)},
                     )
 
+                elif kind == "on_tool_end" and event["name"] == "query_spreadsheet":
+                    output = event["data"].get("output")
+                    for hit in _extract_hits(output):
+                        retrieved[str(hit["chunk_id"])] = hit
+                    run = _query_run(getattr(output, "artifact", None) or {})
+                    code_runs.append(run)
+                    yield sse("code_run", {**run, "files": []})
+
                 elif kind == "on_tool_end" and event["name"] == "run_python":
                     code = pending_runs.pop(str(event.get("run_id")), "")
                     artifact = getattr(event["data"].get("output"), "artifact", None) or {}
@@ -573,6 +581,8 @@ def _tool_phase(tool_name: str, search_starts: int) -> str:
         return "searching" if search_starts == 0 else "comparing"
     if tool_name == "run_python":
         return "running_code"
+    if tool_name in {"query_spreadsheet", "describe_spreadsheet"}:
+        return "querying"
     if tool_name in {"get_chunk_context", "read_document_page", "get_document_metadata"}:
         return "verifying"
     return "reviewing"
@@ -591,6 +601,28 @@ def _code_run(code: str, artifact: dict) -> dict:
     }
 
 
+def _query_run(artifact: dict) -> dict:
+    """One query_spreadsheet call, in the shape of a code run: the UI shows the
+    SQL as the code and the result table as the output."""
+    from chat.sheet_tools import table_text
+
+    output = ""
+    if artifact.get("ok"):
+        count = artifact.get("row_count") or 0
+        more = "+" if artifact.get("truncated") else ""
+        output = table_text(artifact.get("columns") or [], artifact.get("rows") or [])
+        output += f"\n\n{count}{more} row{'s' if count != 1 else ''}"
+    return {
+        "name": "query_spreadsheet",
+        "code": artifact.get("sql") or "",
+        "ok": bool(artifact.get("ok")),
+        "stdout": output,
+        "stderr": artifact.get("error") or "",
+        "duration_ms": artifact.get("duration_ms"),
+        "file_ids": [],
+    }
+
+
 def _extract_hits(output) -> list[dict]:
     """Pull chunk hits out of a ToolMessage payload, whatever shape it arrived in."""
     payload = output
@@ -601,6 +633,8 @@ def _extract_hits(output) -> list[dict]:
             payload = json.loads(payload)
         except json.JSONDecodeError:
             return []
+    if isinstance(payload, dict):
+        payload = payload.get("hits")  # query_spreadsheet's citable rows
     if isinstance(payload, list):
         return [h for h in payload if isinstance(h, dict) and h.get("chunk_id")]
     return []

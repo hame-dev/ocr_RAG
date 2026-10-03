@@ -14,9 +14,13 @@ const VARIANT: Record<Tone, "secondary" | "default" | "success" | "warning" | "d
 };
 
 /** A document's lifecycle state in words, never the raw `ocr_running`. */
-export function StatusBadge({ status, className }: { status: string; className?: string }) {
+export function StatusBadge({
+  status, className, spreadsheet,
+}: { status: string; className?: string; spreadsheet?: boolean }) {
   const { t } = useLocale();
-  const meta = statusMeta(status);
+  const base = statusMeta(status);
+  // A spreadsheet is never OCR'd: at "preprocessed" it waits for its columns.
+  const meta = spreadsheet && status === "preprocessed" ? { ...base, label: "statusReviewColumns" as const } : base;
   return (
     <Badge variant={VARIANT[meta.tone]} className={className}>
       <span

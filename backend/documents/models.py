@@ -67,6 +67,12 @@ class Document(models.Model):
     def display_title(self) -> str:
         return self.title or self.original_filename
 
+    @property
+    def is_spreadsheet(self) -> bool:
+        from sheets.services.parse import SPREADSHEET_MIMES
+
+        return self.mime_type in SPREADSHEET_MIMES
+
 
 class DocumentPage(models.Model):
     document = models.ForeignKey(
@@ -126,6 +132,7 @@ class TextRevision(models.Model):
         ("ai_correction", "AI correction"),
         ("manual_entry", "Typed by hand"),
         ("merge", "Merged"),
+        ("sheet_import", "Spreadsheet import"),
     ]
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)

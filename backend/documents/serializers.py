@@ -2,6 +2,14 @@ from django.conf import settings
 from rest_framework import serializers
 
 from documents.models import Document, DocumentEvent, DocumentPage, TextRevision
+from sheets.services.parse import (
+    CSV_MIME,
+    SPREADSHEET_MIMES,
+    XLSX_MIME,
+    SpreadsheetError,
+    is_xlsx,
+    looks_like_csv,
+)
 
 
 class DocumentPageSerializer(serializers.ModelSerializer):
@@ -40,6 +48,7 @@ class DocumentEventSerializer(serializers.ModelSerializer):
 
 class DocumentListSerializer(serializers.ModelSerializer):
     display_title = serializers.CharField(read_only=True)
+    is_spreadsheet = serializers.BooleanField(read_only=True)
     doc_type = serializers.SerializerMethodField()
     summary_short = serializers.SerializerMethodField()
 
@@ -48,7 +57,7 @@ class DocumentListSerializer(serializers.ModelSerializer):
         fields = [
             "id", "display_title", "title", "original_filename", "mime_type",
             "size_bytes", "page_count", "status", "status_detail", "is_digital_pdf",
-            "detected_languages", "metadata_mode", "doc_type", "summary_short",
+            "detected_languages", "metadata_mode", "doc_type", "summary_short", "is_spreadsheet",
             "created_at", "updated_at",
         ]
 
@@ -94,6 +103,8 @@ def _too_big(upload, mime: str) -> str | None:
     thousands of pages or a poster-sized page, and a small PNG can declare
     huge dimensions. Every page is rasterized, so these are checked up front.
     """
+    if mime in SPREADSHEET_MIMES:
+        return None  # read in full by preprocessing, which enforces the sheet limits
     max_pages = settings.MAX_UPLOAD_PAGES
     max_pixels = settings.MAX_PAGE_PIXELS
     try:
@@ -135,6 +146,14 @@ def sniff_mime(upload) -> str | None:
     upload.seek(0)
     if head.startswith(b"%PDF-"):
         return "application/pdf"
+    if head.startswith(b"PK"):
+        # A zip is only accepted as an Excel workbook. Read in full: a zip's
+        # directory is at its end. The size check has already run.
+        data = upload.read()
+        upload.seek(0)
+        if is_xlsx(data, settings.MAX_SHEET_UNCOMPRESSED_BYTES):
+            return XLSX_MIME
+        return None
 
     from PIL import Image
 
@@ -143,10 +162,16 @@ def sniff_mime(upload) -> str | None:
             image.verify()
             fmt = image.format
     except Exception:
-        return None
+        fmt = None
     finally:
         upload.seek(0)
-    return Image.MIME.get(fmt) if fmt in IMAGE_FORMATS else None
+    if fmt is not None:
+        return Image.MIME.get(fmt) if fmt in IMAGE_FORMATS else None
+
+    # Not an image: plain text with a consistent delimiter is a CSV.
+    is_csv = looks_like_csv(upload.read(65536))
+    upload.seek(0)
+    return CSV_MIME if is_csv else None
 
 
 class UploadSerializer(serializers.Serializer):
@@ -165,9 +190,14 @@ class UploadSerializer(serializers.Serializer):
             raise serializers.ValidationError(
                 f"file is larger than {limit // (1024 * 1024)} MB"
             )
-        mime = sniff_mime(upload)
+        try:
+            mime = sniff_mime(upload)
+        except SpreadsheetError as exc:
+            raise serializers.ValidationError(str(exc)) from exc
         if mime is None:
-            raise serializers.ValidationError("only PDF and image files are supported")
+            raise serializers.ValidationError(
+                "only PDF, image, Excel (.xlsx) and CSV files are supported"
+            )
         if reason := _too_big(upload, mime):
             raise serializers.ValidationError(reason)
         upload.sniffed_mime = mime

@@ -36,6 +36,10 @@ export function pages(n: number, t: Translate): string {
   return fmt(t(n === 1 ? "pagesOne" : "pagesOther"), { n: num(n) });
 }
 
+export function sheets(n: number, t: Translate): string {
+  return fmt(t(n === 1 ? "sheetsOne" : "sheetsOther"), { n: num(n) });
+}
+
 /** annual_rent_amount → "Annual rent amount". */
 export function humanizeKey(key: string): string {
   const words = key.replace(/[_-]+/g, " ").replace(/([a-z])([A-Z])/g, "$1 $2").trim();

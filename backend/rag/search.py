@@ -240,7 +240,16 @@ def _format_hit(hit: dict, max_chars: int) -> dict:
         "keywords": merge_keywords(own.get("keywords") or [], own.get("context_keywords") or []),
         "text": hit["text"][:max_chars],
         "score": round(float(hit["score"] or 0), 5),
+        # A spreadsheet chunk is one row: say which, so it can be cited as such.
+        **_sheet_row(hit),
     }
+
+
+def _sheet_row(hit: dict) -> dict:
+    meta = hit.get("meta") or {}
+    if isinstance(meta, dict) and meta.get("row") is not None:
+        return {"sheet": meta.get("sheet") or "", "row": meta["row"]}
+    return {}
 
 
 def _chunk_meta(hit: dict) -> dict:

@@ -91,7 +91,7 @@ def test_ingest_folder_without_waiting_uploads_once_and_skips_the_rest(
     docs = list(Document.objects.filter(owner=user))
     assert [d.original_filename for d in docs] == ["a.pdf"]
     assert "b-copy.pdf" in text and "already ingested" in text
-    assert "notes.txt" in text and "only PDF and image files" in text
+    assert "notes.txt" in text and "only PDF, image, Excel (.xlsx) and CSV files" in text
     assert "c.png" not in text  # subfolders need --recursive
     assert len(env) == 1
 

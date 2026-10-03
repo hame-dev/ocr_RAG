@@ -5,10 +5,17 @@ import { StringKey } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import { useLocale } from "../Providers";
 
-export type Step = "extract" | "review" | "details" | "chat";
-export const STEPS: { id: Step; label: StringKey }[] = [
+export type Step = "extract" | "review" | "columns" | "details" | "chat";
+type StepDef = { id: Step; label: StringKey };
+export const STEPS: StepDef[] = [
   { id: "extract", label: "stepExtract" },
   { id: "review", label: "stepReview" },
+  { id: "details", label: "stepDetails" },
+  { id: "chat", label: "stepChat" },
+];
+// A spreadsheet is never OCR'd: its columns are reviewed instead of its text.
+export const SHEET_STEPS: StepDef[] = [
+  { id: "columns", label: "stepColumns" },
   { id: "details", label: "stepDetails" },
   { id: "chat", label: "stepChat" },
 ];
@@ -22,14 +29,16 @@ export function stepProgress(status: string, revisionNo: number | null): Record<
   return {
     extract: revisionNo != null,
     review: FINALIZED.includes(status),
+    columns: FINALIZED.includes(status),
     details: HAS_DETAILS.includes(status),
     chat: CHAT_READY.includes(status),
   };
 }
 
 /** Where a document should open: the first unfinished step, or Review when done. */
-export function initialStep(status: string, revisionNo: number | null): Step {
+export function initialStep(status: string, revisionNo: number | null, spreadsheet = false): Step {
   const done = stepProgress(status, revisionNo);
+  if (spreadsheet) return done.columns && !done.details ? "details" : "columns";
   if (!done.extract) return "extract";
   if (!done.review) return "review";
   if (!done.details) return "details";
@@ -37,13 +46,15 @@ export function initialStep(status: string, revisionNo: number | null): Step {
 }
 
 export function Stepper({
-  current, done, onSelect,
+  current, done, onSelect, steps = STEPS,
 }: {
   current: Step;
   done: Record<Step, boolean>;
   onSelect: (step: Step) => void;
+  steps?: StepDef[];
 }) {
   const { t } = useLocale();
+  const STEPS = steps;
   // A step is reachable once every step before it is done (or it is itself done).
   const reachable = (index: number) => STEPS.slice(0, index).every((s) => done[s.id]);
 

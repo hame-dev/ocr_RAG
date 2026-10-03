@@ -19,6 +19,11 @@ from common import fsm
 from documents.models import Document, TextRevision
 
 PREPROCESS_PROFILES = ["neural"]
+# Not every system's mime.types knows these.
+KNOWN_EXTENSIONS = {
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": ".xlsx",
+    "text/csv": ".csv",
+}
 # Statuses after which the document will not move on its own.
 STUCK = {fsm.FAILED, fsm.OCR_FAILED}
 
@@ -55,7 +60,7 @@ def create_document(
     target_dir = os.path.join(settings.MEDIA_ROOT, "docs", str(document.id))
     os.makedirs(target_dir, exist_ok=True)
     # From the sniffed type, not the client's filename.
-    extension = mimetypes.guess_extension(upload.sniffed_mime) or ".bin"
+    extension = KNOWN_EXTENSIONS.get(upload.sniffed_mime) or mimetypes.guess_extension(upload.sniffed_mime) or ".bin"
     target_path = os.path.join(target_dir, f"original{extension}")
 
     digest = hashlib.sha256()
@@ -98,6 +103,17 @@ def wait_for_status(document: Document, targets: Iterable[str], *, timeout: floa
             raise IngestError(f"document failed ({document.status}{detail})")
         if time.monotonic() - started > timeout:
             raise IngestError(f"timed out after {timeout:.0f}s waiting for {sorted(targets)} (still {document.status})")
+        time.sleep(poll)
+
+
+def wait_for_proposals(document: Document, *, timeout: float, poll: float = 2.0) -> None:
+    """Poll until every sheet of a spreadsheet has a proposed schema."""
+    from sheets.models import Sheet
+
+    started = time.monotonic()
+    while document.sheets.filter(schema_status__in=[Sheet.PENDING, Sheet.PROPOSING]).exists():
+        if time.monotonic() - started > timeout:
+            raise IngestError(f"timed out after {timeout:.0f}s waiting for the column proposal")
         time.sleep(poll)
 
 
@@ -144,6 +160,17 @@ def process_document(
 
     wait_for_status(document, {fsm.PREPROCESSED}, timeout=timeout, poll=poll)
     stage("preprocessed")
+
+    if document.is_spreadsheet:
+        # No OCR: accept the proposed column schema, as clicking Confirm would.
+        from sheets.services.pipeline import confirm
+
+        wait_for_proposals(document, timeout=timeout, poll=poll)
+        stage("columns proposed")
+        confirm(document, {}, actor="system")
+        wait_for_status(document, {fsm.READY}, timeout=timeout, poll=poll)
+        stage("ready")
+        return
 
     batch = start_ocr_batch(document, engines=engines, languages=languages, options={})
     status = wait_for_status(document, {fsm.OCR_DONE, fsm.OCR_PARTIAL}, timeout=timeout, poll=poll)

@@ -5,7 +5,7 @@ import { usePathname } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   AlertCircle, ArrowUpRight, BookOpenText, Check, Copy, FileText, Library, RotateCw, Sparkles, SquareTerminal,
-  type LucideIcon,
+  Table2, type LucideIcon,
 } from "lucide-react";
 import {
   API_BASE, ChatAttachment, ChatMode, Citation, CodeRun, ConversationDetail, GeneratedFile, PhaseSummary, ResearchMode,
@@ -75,6 +75,7 @@ const TOOL_PHASES: Record<string, { label: StringKey; icon: LucideIcon }> = {
   verifying: { label: "verifyingEvidence", icon: BookOpenText },
   reviewing: { label: "reviewingSources", icon: BookOpenText },
   running_code: { label: "runningCode", icon: SquareTerminal },
+  querying: { label: "queryingSheet", icon: Table2 },
 };
 
 // Strong ease-in-out for on-screen movement (the composer travelling from the
@@ -661,14 +662,23 @@ const AssistantMessage = memo(function AssistantMessage({
                 <Tooltip key={citation.chunk_id}>
                   <TooltipTrigger asChild>
                     <a
-                      href={`${API_BASE}/api/documents/${citation.document_id}/pages/${citation.page_start ?? 1}/image/`}
+                      href={
+                        citation.row != null
+                          ? `/documents/${citation.document_id}`
+                          : `${API_BASE}/api/documents/${citation.document_id}/pages/${citation.page_start ?? 1}/image/`
+                      }
                       target="_blank"
                       rel="noreferrer"
                       className="flex max-w-64 items-center gap-1.5 rounded-md border bg-card px-2 py-1 text-xs transition-colors hover:border-primary/40 hover:bg-accent"
                     >
                       <span className="tabular-nums font-semibold text-primary">{citation.n}</span>
                       <span className="truncate" dir="auto">{citation.title}</span>
-                      {citation.page_start != null && (
+                      {citation.row != null ? (
+                        <span className="shrink-0 text-muted-foreground">
+                          {citation.sheet ? <span dir="auto">{citation.sheet} · </span> : null}
+                          <span className="tabular-nums">{t("rowShort")} {num(citation.row)}</span>
+                        </span>
+                      ) : citation.page_start != null && (
                         <span className="tabular-nums shrink-0 text-muted-foreground">{t("pageShort")}{num(citation.page_start)}</span>
                       )}
                     </a>

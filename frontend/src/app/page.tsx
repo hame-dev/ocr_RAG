@@ -3,9 +3,9 @@
 import { useDeferredValue, useMemo, useState } from "react";
 import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
-import { AlertTriangle, FileImage, FileText, Plus, Search, SearchX, Upload } from "lucide-react";
+import { AlertTriangle, FileImage, FileSpreadsheet, FileText, Plus, Search, SearchX, Upload } from "lucide-react";
 import { DocumentSummary, api } from "@/lib/api";
-import { pages, relativeTime, statusBucket } from "@/lib/format";
+import { pages, relativeTime, sheets, statusBucket } from "@/lib/format";
 import { useLocale } from "@/components/Providers";
 import { StatusBadge } from "@/components/StatusBadge";
 import { EmptyState, Page, PageHeader } from "@/components/app-shell/Page";
@@ -132,7 +132,7 @@ export default function LibraryPage() {
 function DocumentCard({ doc, locale }: { doc: DocumentSummary; locale: "ar" | "en" }) {
   const { t } = useLocale();
   const isImage = !doc.original_filename.toLowerCase().endsWith(".pdf");
-  const Icon = isImage ? FileImage : FileText;
+  const Icon = doc.is_spreadsheet ? FileSpreadsheet : isImage ? FileImage : FileText;
 
   return (
     <Link href={`/documents/${doc.id}`} className="group rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
@@ -156,9 +156,11 @@ function DocumentCard({ doc, locale }: { doc: DocumentSummary; locale: "ar" | "e
         </p>
 
         <div className="mt-4 flex flex-wrap items-center gap-2 border-t pt-3 text-xs text-muted-foreground">
-          <StatusBadge status={doc.status} />
+          <StatusBadge status={doc.status} spreadsheet={doc.is_spreadsheet} />
           {doc.doc_type && <Badge variant="outline" className="capitalize">{doc.doc_type}</Badge>}
-          {doc.page_count != null && <span>{pages(doc.page_count, t)}</span>}
+          {doc.page_count != null && (
+            <span>{doc.is_spreadsheet ? sheets(doc.page_count, t) : pages(doc.page_count, t)}</span>
+          )}
           <span className="ms-auto">{relativeTime(doc.created_at, locale)}</span>
         </div>
       </Card>

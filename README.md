@@ -28,6 +28,23 @@ pulled, binary not on PATH, sidecar unreachable — and the exact command to fix
 pages each by default, set by `MAX_UPLOAD_MB` / `MAX_UPLOAD_PAGES`); each becomes
 its own document.
 
+**Spreadsheets too.** Upload an `.xlsx` or `.csv` (student records, a price
+list, an export) and it skips OCR. The app finds the real header row, even
+below a title or a merged group header, and works out each column's type. It
+then asks the LLM what each column means, using only the headers and a few
+sample values. In the **Columns** step you review that suggestion: names,
+types, which column identifies a row, which columns to combine (first + last
+name), and which to fill down under merged cells. A live preview shows exactly
+how rows will be indexed. Once you confirm, every row becomes its own cited
+chunk, so "tell me about Ahmed Ali" finds the row in Arabic or English. The
+sheet is also written to a read-only SQLite file per document, so "how many
+students failed math?" or "average grade per class" is answered by a real
+query, never by guessing from search results. Each query and its result
+appear in a "Ran query" panel. The agent can only run single `SELECT`
+statements: an authorizer refuses writes, `ATTACH` and `PRAGMA`, and every
+query has a deadline and a row cap. Limits: `MAX_SHEET_ROWS` (20 000) and
+`MAX_SHEET_COLS` (100). Deep research still uses search only.
+
 **Edit without losing the original.** Raw OCR output is immutable. Every edit
 creates a new revision with a parent pointer, so you can always get back to what
 the engine actually produced.
