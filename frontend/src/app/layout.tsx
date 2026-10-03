@@ -21,7 +21,7 @@ const doc = Noto_Naskh_Arabic({
 });
 
 export const metadata: Metadata = {
-  title: "Bayan",
+  title: "Daleel",
   description: "Read, correct and chat with Arabic and English documents.",
 };
 

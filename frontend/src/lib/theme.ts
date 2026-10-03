@@ -8,7 +8,7 @@ export const THEME_MODES: ThemeMode[] = ["system", "light", "dark"];
 /** Swatch values are the light-mode hex from globals.css, for the picker chips. */
 export const ACCENTS: { name: Accent; swatch: string; label_en: string; label_ar: string }[] = [
   // Matches the logo's primary blue (#014f7b).
-  { name: "brand", swatch: "#014f7b", label_en: "Bayan", label_ar: "بيان" },
+  { name: "brand", swatch: "#014f7b", label_en: "Daleel", label_ar: "دليل" },
   { name: "blue", swatch: "#2563eb", label_en: "Blue", label_ar: "أزرق" },
   { name: "violet", swatch: "#7c3aed", label_en: "Violet", label_ar: "بنفسجي" },
   { name: "emerald", swatch: "#059669", label_en: "Emerald", label_ar: "أخضر" },

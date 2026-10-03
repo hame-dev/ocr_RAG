@@ -342,7 +342,7 @@ const STRINGS = {
     suspectSummary: "هذه النتيجة أقصر بكثير من غيرها؛ ربما لخّص النموذج النص بدلاً من نسخه.",
   },
   en: {
-    appName: "Bayan",
+    appName: "Daleel",
     library: "Library",
     upload: "Upload",
     chat: "Chat",
@@ -431,7 +431,7 @@ const STRINGS = {
     accentColor: "Accent color",
     language: "Language",
     signIn: "Sign in",
-    signInTitle: "Sign in to Bayan",
+    signInTitle: "Sign in to Daleel",
     signInHint: "Accounts are created by an administrator. Ask them if you don't have one.",
     username: "Username",
     password: "Password",

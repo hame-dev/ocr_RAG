@@ -177,7 +177,7 @@ def test_system_prompts_carry_the_bayan_identity(auth_client, user, monkeypatch)
 
     stream(auth_client, conversation.id, chat_mode="general", thinking="instant")
 
-    assert "You are Bayan" in script.prompts[0][0].content
+    assert "You are Daleel" in script.prompts[0][0].content
 
 
 def _hit(document, chunk_id, text):
